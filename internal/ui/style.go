@@ -49,3 +49,15 @@ func ProgressLine(prefix string, processed, total, succeeded, failed, skipped in
 		skippedColor.Sprintf("skipped=%d", skipped),
 	)
 }
+
+func PlainProgressLine(prefix string, processed, total, succeeded, failed, skipped int) string {
+	return fmt.Sprintf(
+		"%s processed=%d/%d success=%d failed=%d skipped=%d",
+		prefix,
+		processed,
+		total,
+		succeeded,
+		failed,
+		skipped,
+	)
+}
