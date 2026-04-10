@@ -42,7 +42,8 @@ type counters struct {
 	Processed int
 	Succeeded int
 	Failed    int
-	Skipped   int
+	Archived  int
+	Missing   int
 }
 
 type filePlan struct {
@@ -127,8 +128,10 @@ func (a *App) Run(ctx context.Context) error {
 		switch result.Status {
 		case "success":
 			counts.Succeeded++
-		case "skipped":
-			counts.Skipped++
+		case "archived":
+			counts.Archived++
+		case "missing":
+			counts.Missing++
 		default:
 			counts.Failed++
 		}
@@ -143,8 +146,10 @@ func (a *App) Run(ctx context.Context) error {
 			switch pendingResult.Status {
 			case "success":
 				fmt.Fprintln(a.output, ui.SuccessLabel(pendingResult.Date, "success"))
-			case "skipped":
-				fmt.Fprintln(a.output, ui.SkippedLabel(pendingResult.Date, "skipped"))
+			case "archived":
+				fmt.Fprintln(a.output, ui.ArchivedLabel(pendingResult.Date, "archived"))
+			case "missing":
+				fmt.Fprintln(a.output, ui.MissingLabel(pendingResult.Date, "missing"))
 			default:
 				fmt.Fprintln(a.output, ui.FailedLabel(pendingResult.Date, pendingResult.Err))
 			}
@@ -192,13 +197,13 @@ func (a *App) processDate(ctx context.Context, day string) dateResult {
 		return dateResult{Index: index, Date: dateText, Status: "failed", Err: err}
 	}
 	if alreadyArchived {
-		return dateResult{Index: index, Date: dateText, Status: "skipped"}
+		return dateResult{Index: index, Date: dateText, Status: "archived"}
 	}
 
 	plan, err := a.buildRemotePlan(ctx, targetURL)
 	if err != nil {
 		if errors.Is(err, downloader.ErrNotFound) {
-			return dateResult{Index: index, Date: dateText, Status: "skipped"}
+			return dateResult{Index: index, Date: dateText, Status: "missing"}
 		}
 		return dateResult{Index: index, Date: dateText, Status: "failed", Err: err}
 	}
@@ -217,7 +222,7 @@ func (a *App) processDryRun(ctx context.Context, index int, day, targetURL strin
 	body, err := a.client.Fetch(ctx, targetURL)
 	if err != nil {
 		if errors.Is(err, downloader.ErrNotFound) {
-			return dateResult{Index: index, Date: day, Status: "skipped"}
+			return dateResult{Index: index, Date: day, Status: "missing"}
 		}
 		return dateResult{Index: index, Date: day, Status: "failed", Err: err}
 	}
@@ -419,11 +424,11 @@ func (a *App) shouldSendPeriodicDiscord(succeeded int) bool {
 }
 
 func (a *App) summaryLine(prefix string, counts counters, total int) string {
-	return ui.ProgressLine(prefix, counts.Processed, total, counts.Succeeded, counts.Failed, counts.Skipped)
+	return ui.ProgressLine(prefix, counts.Processed, total, counts.Succeeded, counts.Failed, counts.Archived, counts.Missing)
 }
 
 func (a *App) plainSummaryLine(prefix string, counts counters, total int) string {
-	return ui.PlainProgressLine(prefix, counts.Processed, total, counts.Succeeded, counts.Failed, counts.Skipped)
+	return ui.PlainProgressLine(prefix, counts.Processed, total, counts.Succeeded, counts.Failed, counts.Archived, counts.Missing)
 }
 
 func resolveMany(baseURL string, values []string) ([]string, error) {
@@ -519,7 +524,7 @@ func (a *App) sendDiscordSafely(ctx context.Context, content string) {
 
 	if err := a.notifier.Send(ctx, content); err != nil {
 		if errors.Is(err, notify.ErrRateLimited) {
-			fmt.Fprintln(a.output, ui.SkippedLabel("discord", "rate limited"))
+			fmt.Fprintln(a.output, ui.MissingLabel("discord", "rate limited"))
 			return
 		}
 		fmt.Fprintln(a.output, ui.FailedLabel("discord", err))

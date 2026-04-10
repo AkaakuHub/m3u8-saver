@@ -13,7 +13,8 @@ var (
 	progressColor = color.New(color.FgBlue)
 	successColor  = color.New(color.FgGreen)
 	failedColor   = color.New(color.FgRed)
-	skippedColor  = color.New(color.FgYellow)
+	archivedColor = color.New(color.FgCyan)
+	missingColor  = color.New(color.FgYellow)
 )
 
 func ConfigureColor(output io.Writer) {
@@ -30,34 +31,40 @@ func SuccessLabel(date, status string) string {
 	return successColor.Sprintf("%s %s", date, status)
 }
 
-func SkippedLabel(date, status string) string {
-	return skippedColor.Sprintf("%s %s", date, status)
+func ArchivedLabel(date, status string) string {
+	return archivedColor.Sprintf("%s %s", date, status)
+}
+
+func MissingLabel(date, status string) string {
+	return missingColor.Sprintf("%s %s", date, status)
 }
 
 func FailedLabel(date string, err error) string {
 	return failedColor.Sprintf("%s failed:", date) + " " + err.Error()
 }
 
-func ProgressLine(prefix string, processed, total, succeeded, failed, skipped int) string {
+func ProgressLine(prefix string, processed, total, succeeded, failed, archived, missing int) string {
 	return fmt.Sprintf(
-		"%s processed=%d/%d %s %s %s",
+		"%s processed=%d/%d %s %s %s %s",
 		progressColor.Sprintf("%s", prefix),
 		processed,
 		total,
 		successColor.Sprintf("success=%d", succeeded),
 		failedColor.Sprintf("failed=%d", failed),
-		skippedColor.Sprintf("skipped=%d", skipped),
+		archivedColor.Sprintf("archived=%d", archived),
+		missingColor.Sprintf("missing=%d", missing),
 	)
 }
 
-func PlainProgressLine(prefix string, processed, total, succeeded, failed, skipped int) string {
+func PlainProgressLine(prefix string, processed, total, succeeded, failed, archived, missing int) string {
 	return fmt.Sprintf(
-		"%s processed=%d/%d success=%d failed=%d skipped=%d",
+		"%s processed=%d/%d success=%d failed=%d archived=%d missing=%d",
 		prefix,
 		processed,
 		total,
 		succeeded,
 		failed,
-		skipped,
+		archived,
+		missing,
 	)
 }
