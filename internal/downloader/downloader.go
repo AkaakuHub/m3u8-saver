@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"m3u8-saver/internal/ui"
 )
 
 var ErrNotFound = errors.New("resource not found")
@@ -24,7 +26,8 @@ type ResourceMetadata struct {
 }
 
 type ProgressReporter interface {
-	NewProxyReader(label string, total int64, reader io.ReadCloser) io.ReadCloser
+	NewProxyReader(label string, total int64, reader io.ReadCloser) *ui.ProxyReader
+	Complete(label string, total int64)
 }
 
 func New(timeout time.Duration, retries int) *Client {
@@ -202,9 +205,11 @@ func (c *Client) downloadOnce(ctx context.Context, resourceURL, destinationPath 
 		return false, fmt.Errorf("received status %d for %s", response.StatusCode, resourceURL)
 	}
 
-	reader := response.Body
+	var reader io.ReadCloser = response.Body
+	var progressReader *ui.ProxyReader
 	if progress != nil {
-		reader = progress.NewProxyReader(progressLabel, expectedSize, response.Body)
+		progressReader = progress.NewProxyReader(progressLabel, expectedSize, response.Body)
+		reader = progressReader
 	}
 	defer reader.Close()
 
@@ -216,24 +221,42 @@ func (c *Client) downloadOnce(ctx context.Context, resourceURL, destinationPath 
 
 	written, err := io.Copy(file, reader)
 	if err != nil {
+		if progressReader != nil {
+			progressReader.Abort()
+		}
 		_ = file.Close()
 		_ = os.Remove(tempPath)
 		return true, fmt.Errorf("failed to write temp file %s: %w", tempPath, err)
 	}
 	if written != expectedSize {
+		if progressReader != nil {
+			progressReader.Abort()
+		}
 		_ = file.Close()
 		_ = os.Remove(tempPath)
 		return true, fmt.Errorf("downloaded size mismatch for %s: expected=%d actual=%d", resourceURL, expectedSize, written)
 	}
 
 	if err := file.Close(); err != nil {
+		if progressReader != nil {
+			progressReader.Abort()
+		}
 		_ = os.Remove(tempPath)
 		return false, fmt.Errorf("failed to close temp file %s: %w", tempPath, err)
 	}
 
 	if err := os.Rename(tempPath, destinationPath); err != nil {
+		if progressReader != nil {
+			progressReader.Abort()
+		}
 		_ = os.Remove(tempPath)
 		return false, fmt.Errorf("failed to move temp file to %s: %w", destinationPath, err)
+	}
+	if progress != nil {
+		if progressReader != nil {
+			progressReader.Wait()
+		}
+		progress.Complete(progressLabel, expectedSize)
 	}
 
 	return false, nil

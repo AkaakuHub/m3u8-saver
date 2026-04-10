@@ -30,6 +30,7 @@ type App struct {
 	notifier *notify.DiscordWebhook
 	progress *ui.Progress
 	state    *state.Store
+	buffered []string
 }
 
 type dateResult struct {
@@ -146,18 +147,19 @@ func (a *App) Run(ctx context.Context) error {
 
 			switch pendingResult.Status {
 			case status.Success:
-				fmt.Fprintln(a.output, ui.SuccessLabel(pendingResult.Date, status.Success))
+				a.writeResultLine(ui.SuccessLabel(pendingResult.Date, status.Success))
 			case status.Archived:
-				fmt.Fprintln(a.output, ui.ArchivedLabel(pendingResult.Date, status.Archived))
+				a.writeResultLine(ui.ArchivedLabel(pendingResult.Date, status.Archived))
 			case status.Missing:
-				fmt.Fprintln(a.output, ui.MissingLabel(pendingResult.Date, status.NotFound))
+				a.writeResultLine(ui.MissingLabel(pendingResult.Date, status.NotFound))
 			default:
-				fmt.Fprintln(a.output, ui.FailedLabel(pendingResult.Date, pendingResult.Err))
+				a.writeResultLine(ui.FailedLabel(pendingResult.Date, pendingResult.Err))
 			}
 
 			delete(pendingResults, nextResultIndex)
 			nextResultIndex++
 		}
+		a.flushBufferedLines()
 
 		if a.shouldSendPeriodicDiscord(counts.Succeeded) {
 			a.sendDiscordSafely(ctx, a.plainSummaryLine("progress", counts, total))
@@ -167,6 +169,7 @@ func (a *App) Run(ctx context.Context) error {
 	if a.progress != nil {
 		a.progress.Wait()
 	}
+	a.flushBufferedLines()
 
 	fmt.Fprintln(a.output, a.summaryLine("completed", counts, total))
 
@@ -405,7 +408,7 @@ func (a *App) downloadMediaFiles(ctx context.Context, dayDir string, files []fil
 	localPaths := make([]string, 0, len(files))
 	for _, file := range files {
 		destinationPath := filepath.Join(dayDir, filepath.FromSlash(file.LocalPath))
-		progressLabel := fmt.Sprintf("%s/%s", filepath.Base(dayDir), file.LocalPath)
+		progressLabel := fmt.Sprintf("%s %s", filepath.Base(dayDir), file.LocalPath)
 		if err := a.client.DownloadToFile(ctx, file.RemoteURL, destinationPath, file.ExpectedSize, a.progress, progressLabel); err != nil {
 			return nil, err
 		}
@@ -525,9 +528,29 @@ func (a *App) sendDiscordSafely(ctx context.Context, content string) {
 
 	if err := a.notifier.Send(ctx, content); err != nil {
 		if errors.Is(err, notify.ErrRateLimited) {
-			fmt.Fprintln(a.output, ui.MissingLabel("discord", "rate limited"))
+			a.writeResultLine(ui.MissingLabel("discord", "rate limited"))
 			return
 		}
-		fmt.Fprintln(a.output, ui.FailedLabel("discord", err))
+		a.writeResultLine(ui.FailedLabel("discord", err))
 	}
+}
+
+func (a *App) writeResultLine(line string) {
+	if a.progress != nil && a.progress.HasActive() {
+		a.buffered = append(a.buffered, line)
+		return
+	}
+
+	fmt.Fprintln(a.output, line)
+}
+
+func (a *App) flushBufferedLines() {
+	if a.progress != nil && a.progress.HasActive() {
+		return
+	}
+
+	for _, line := range a.buffered {
+		fmt.Fprintln(a.output, line)
+	}
+	a.buffered = a.buffered[:0]
 }
