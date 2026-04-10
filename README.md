@@ -17,7 +17,7 @@ The tool is focused on saving source assets. It does not transcode, mux, or rewr
 
 ## Config
 
-See [`config.example.json`](config.example.json).
+See `config.example.json`.
 
 ## Run
 
