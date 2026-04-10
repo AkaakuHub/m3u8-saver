@@ -224,6 +224,7 @@ func (a *App) buildRemotePlan(ctx context.Context, masterURL string) (remotePlan
 	if err != nil {
 		return remotePlan{}, err
 	}
+	localMasterBody := hls.BuildSingleVariantMaster(masterPlaylist)
 
 	audioURL, err := resolveURL(masterURL, masterPlaylist.AudioURI)
 	if err != nil {
@@ -282,8 +283,8 @@ func (a *App) buildRemotePlan(ctx context.Context, masterURL string) (remotePlan
 		Master: filePlan{
 			RemoteURL:    masterURL,
 			LocalPath:    "index.m3u8",
-			Body:         masterBody,
-			ExpectedSize: int64(len(masterBody)),
+			Body:         localMasterBody,
+			ExpectedSize: int64(len(localMasterBody)),
 		},
 		AudioPlaylist: filePlan{
 			RemoteURL:    audioURL,
