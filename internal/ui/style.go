@@ -65,13 +65,13 @@ func ProgressLine(prefix string, processed, total, succeeded, failed, archived, 
 		successColor.Sprintf("success=%d", succeeded),
 		failedColor.Sprintf("failed=%d", failed),
 		archivedColor.Sprintf("archived=%d", archived),
-		missingColor.Sprintf("missing=%d", missing),
+		missingColor.Sprintf("N/A=%d", missing),
 	)
 }
 
 func PlainProgressLine(prefix string, processed, total, succeeded, failed, archived, missing int) string {
 	return fmt.Sprintf(
-		"%s processed=%d/%d success=%d failed=%d archived=%d missing=%d",
+		"%s processed=%d/%d success=%d failed=%d archived=%d N/A=%d",
 		prefix,
 		processed,
 		total,

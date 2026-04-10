@@ -149,7 +149,7 @@ func (a *App) Run(ctx context.Context) error {
 			case "archived":
 				fmt.Fprintln(a.output, ui.ArchivedLabel(pendingResult.Date, "archived"))
 			case "missing":
-				fmt.Fprintln(a.output, ui.MissingLabel(pendingResult.Date, "missing"))
+				fmt.Fprintln(a.output, ui.MissingLabel(pendingResult.Date, "N/A"))
 			default:
 				fmt.Fprintln(a.output, ui.FailedLabel(pendingResult.Date, pendingResult.Err))
 			}
