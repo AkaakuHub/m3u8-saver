@@ -1,0 +1,14 @@
+{
+  "urlTemplate": "https://example.com/{yyyymmdd}/index.m3u8",
+  "startDate": "20230101",
+  "endDate": "20260630",
+  "outDir": "./archive",
+  "dryRun": true,
+  "retryCount": 3,
+  "parallelism": 1,
+  "requestTimeoutSec": 30,
+  "discord": {
+    "webhookUrl": "https://discord.com/api/webhooks/your-webhook-id/your-webhook-token",
+    "notifyEvery": 10
+  }
+}
