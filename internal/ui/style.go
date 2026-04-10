@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 
+	"m3u8-saver/internal/status"
+
 	"github.com/fatih/color"
 	"github.com/mattn/go-isatty"
 )
@@ -27,20 +29,20 @@ func ConfigureColor(output io.Writer) {
 	color.NoColor = !isatty.IsTerminal(file.Fd()) && !isatty.IsCygwinTerminal(file.Fd())
 }
 
-func SuccessLabel(date, status string) string {
-	return successColor.Sprintf("%s %s", date, status)
+func SuccessLabel(date string, value status.Type) string {
+	return successColor.Sprintf("%s %s", date, value)
 }
 
-func ArchivedLabel(date, status string) string {
-	return archivedColor.Sprintf("%s %s", date, status)
+func ArchivedLabel(date string, value status.Type) string {
+	return archivedColor.Sprintf("%s %s", date, value)
 }
 
-func MissingLabel(date, status string) string {
-	return missingColor.Sprintf("%s %s", date, status)
+func MissingLabel(date string, value status.Type) string {
+	return missingColor.Sprintf("%s %s", date, value)
 }
 
-func IncompleteLabel(date, status string) string {
-	return missingColor.Sprintf("%s %s", date, status)
+func IncompleteLabel(date string, value status.Type) string {
+	return missingColor.Sprintf("%s %s", date, value)
 }
 
 func FailedLabel(date string, err error) string {

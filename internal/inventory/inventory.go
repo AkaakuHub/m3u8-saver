@@ -10,6 +10,7 @@ import (
 
 	"m3u8-saver/internal/hls"
 	"m3u8-saver/internal/state"
+	"m3u8-saver/internal/status"
 	"m3u8-saver/internal/ui"
 )
 
@@ -48,14 +49,14 @@ func Run(outDir string, output io.Writer) error {
 			continue
 		}
 		if !ok {
-			fmt.Fprintln(output, ui.IncompleteLabel(date, "incomplete"))
+			fmt.Fprintln(output, ui.IncompleteLabel(date, status.Incomplete))
 			continue
 		}
 		if err := store.Mark(date); err != nil {
 			return err
 		}
 		archivedCount++
-		fmt.Fprintln(output, ui.SuccessLabel(date, "success"))
+		fmt.Fprintln(output, ui.SuccessLabel(date, status.Success))
 	}
 
 	fmt.Fprintln(output, ui.InventorySummaryLine(archivedCount, len(dateDirectories)))

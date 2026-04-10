@@ -19,6 +19,7 @@ import (
 	"m3u8-saver/internal/hls"
 	"m3u8-saver/internal/notify"
 	"m3u8-saver/internal/state"
+	"m3u8-saver/internal/status"
 	"m3u8-saver/internal/ui"
 )
 
@@ -34,7 +35,7 @@ type App struct {
 type dateResult struct {
 	Index  int
 	Date   string
-	Status string
+	Status status.Type
 	Err    error
 }
 
@@ -126,11 +127,11 @@ func (a *App) Run(ctx context.Context) error {
 	for result := range results {
 		counts.Processed++
 		switch result.Status {
-		case "success":
+		case status.Success:
 			counts.Succeeded++
-		case "archived":
+		case status.Archived:
 			counts.Archived++
-		case "missing":
+		case status.Missing:
 			counts.Missing++
 		default:
 			counts.Failed++
@@ -144,12 +145,12 @@ func (a *App) Run(ctx context.Context) error {
 			}
 
 			switch pendingResult.Status {
-			case "success":
-				fmt.Fprintln(a.output, ui.SuccessLabel(pendingResult.Date, "success"))
-			case "archived":
-				fmt.Fprintln(a.output, ui.ArchivedLabel(pendingResult.Date, "archived"))
-			case "missing":
-				fmt.Fprintln(a.output, ui.MissingLabel(pendingResult.Date, "N/A"))
+			case status.Success:
+				fmt.Fprintln(a.output, ui.SuccessLabel(pendingResult.Date, status.Success))
+			case status.Archived:
+				fmt.Fprintln(a.output, ui.ArchivedLabel(pendingResult.Date, status.Archived))
+			case status.Missing:
+				fmt.Fprintln(a.output, ui.MissingLabel(pendingResult.Date, status.NotFound))
 			default:
 				fmt.Fprintln(a.output, ui.FailedLabel(pendingResult.Date, pendingResult.Err))
 			}
@@ -183,7 +184,7 @@ func (a *App) Run(ctx context.Context) error {
 func (a *App) processDate(ctx context.Context, day string) dateResult {
 	index, dateText, err := parseJob(day)
 	if err != nil {
-		return dateResult{Date: day, Status: "failed", Err: err}
+		return dateResult{Date: day, Status: status.Failed, Err: err}
 	}
 
 	targetURL := strings.ReplaceAll(a.config.URLTemplate, "{yyyymmdd}", dateText)
@@ -194,43 +195,43 @@ func (a *App) processDate(ctx context.Context, day string) dateResult {
 
 	alreadyArchived, err := a.state.Has(dateText)
 	if err != nil {
-		return dateResult{Index: index, Date: dateText, Status: "failed", Err: err}
+		return dateResult{Index: index, Date: dateText, Status: status.Failed, Err: err}
 	}
 	if alreadyArchived {
-		return dateResult{Index: index, Date: dateText, Status: "archived"}
+		return dateResult{Index: index, Date: dateText, Status: status.Archived}
 	}
 
 	plan, err := a.buildRemotePlan(ctx, targetURL)
 	if err != nil {
 		if errors.Is(err, downloader.ErrNotFound) {
-			return dateResult{Index: index, Date: dateText, Status: "missing"}
+			return dateResult{Index: index, Date: dateText, Status: status.Missing}
 		}
-		return dateResult{Index: index, Date: dateText, Status: "failed", Err: err}
+		return dateResult{Index: index, Date: dateText, Status: status.Failed, Err: err}
 	}
 
 	if err := a.saveDate(ctx, dateText, plan); err != nil {
-		return dateResult{Index: index, Date: dateText, Status: "failed", Err: err}
+		return dateResult{Index: index, Date: dateText, Status: status.Failed, Err: err}
 	}
 	if err := a.state.Mark(dateText); err != nil {
-		return dateResult{Index: index, Date: dateText, Status: "failed", Err: err}
+		return dateResult{Index: index, Date: dateText, Status: status.Failed, Err: err}
 	}
 
-	return dateResult{Index: index, Date: dateText, Status: "success"}
+	return dateResult{Index: index, Date: dateText, Status: status.Success}
 }
 
 func (a *App) processDryRun(ctx context.Context, index int, day, targetURL string) dateResult {
 	body, err := a.client.Fetch(ctx, targetURL)
 	if err != nil {
 		if errors.Is(err, downloader.ErrNotFound) {
-			return dateResult{Index: index, Date: day, Status: "missing"}
+			return dateResult{Index: index, Date: day, Status: status.Missing}
 		}
-		return dateResult{Index: index, Date: day, Status: "failed", Err: err}
+		return dateResult{Index: index, Date: day, Status: status.Failed, Err: err}
 	}
 	if !hls.IsPlaylist(body) {
-		return dateResult{Index: index, Date: day, Status: "failed", Err: fmt.Errorf("index.m3u8 is not a valid playlist")}
+		return dateResult{Index: index, Date: day, Status: status.Failed, Err: fmt.Errorf("index.m3u8 is not a valid playlist")}
 	}
 
-	return dateResult{Index: index, Date: day, Status: "success"}
+	return dateResult{Index: index, Date: day, Status: status.Success}
 }
 
 func (a *App) buildRemotePlan(ctx context.Context, masterURL string) (remotePlan, error) {
