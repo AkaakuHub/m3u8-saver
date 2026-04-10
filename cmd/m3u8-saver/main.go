@@ -17,8 +17,14 @@ func main() {
 }
 
 func run() error {
+	if len(os.Args) == 2 && isHelpArg(os.Args[1]) {
+		printUsage(os.Stdout)
+		return nil
+	}
+
 	if len(os.Args) != 2 {
-		return fmt.Errorf("usage: m3u8-saver <config.json>")
+		printUsage(os.Stderr)
+		return fmt.Errorf("config file path is required")
 	}
 
 	cfg, err := config.Load(os.Args[1])
@@ -32,4 +38,16 @@ func run() error {
 	}
 
 	return application.Run(context.Background())
+}
+
+func isHelpArg(value string) bool {
+	return value == "-h" || value == "--help"
+}
+
+func printUsage(output *os.File) {
+	fmt.Fprintln(output, "Usage:")
+	fmt.Fprintln(output, "  m3u8-saver <config.json>")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Options:")
+	fmt.Fprintln(output, "  -h, --help   Show this help")
 }
