@@ -151,7 +151,7 @@ func (a *App) Run(ctx context.Context) error {
 		}
 
 		if a.shouldSendPeriodicDiscord(counts.Succeeded) {
-			a.sendDiscordSafely(ctx, a.summaryLine("progress", counts, total))
+			a.sendDiscordSafely(ctx, a.plainSummaryLine("progress", counts, total))
 		}
 	}
 
@@ -162,7 +162,7 @@ func (a *App) Run(ctx context.Context) error {
 	fmt.Fprintln(a.output, a.summaryLine("completed", counts, total))
 
 	if counts.Succeeded > 0 {
-		a.sendDiscordSafely(ctx, a.summaryLine("completed", counts, total))
+		a.sendDiscordSafely(ctx, a.plainSummaryLine("completed", counts, total))
 	}
 
 	if counts.Failed > 0 {
@@ -405,6 +405,10 @@ func (a *App) shouldSendPeriodicDiscord(succeeded int) bool {
 
 func (a *App) summaryLine(prefix string, counts counters, total int) string {
 	return ui.ProgressLine(prefix, counts.Processed, total, counts.Succeeded, counts.Failed, counts.Skipped)
+}
+
+func (a *App) plainSummaryLine(prefix string, counts counters, total int) string {
+	return ui.PlainProgressLine(prefix, counts.Processed, total, counts.Succeeded, counts.Failed, counts.Skipped)
 }
 
 func resolveMany(baseURL string, values []string) ([]string, error) {
