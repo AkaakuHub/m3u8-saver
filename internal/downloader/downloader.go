@@ -1,0 +1,227 @@
+package downloader
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+var ErrNotFound = errors.New("resource not found")
+
+type Client struct {
+	httpClient *http.Client
+	retries    int
+}
+
+type ResourceMetadata struct {
+	ContentLength int64
+}
+
+func New(timeout time.Duration, retries int) *Client {
+	return &Client{
+		httpClient: &http.Client{
+			Timeout: timeout,
+		},
+		retries: retries,
+	}
+}
+
+func (c *Client) Fetch(ctx context.Context, resourceURL string) ([]byte, error) {
+	var lastErr error
+
+	for attempt := 0; attempt <= c.retries; attempt++ {
+		body, retry, err := c.fetchOnce(ctx, resourceURL)
+		if err == nil {
+			return body, nil
+		}
+		if errors.Is(err, ErrNotFound) {
+			return nil, err
+		}
+
+		lastErr = err
+		if !retry || attempt == c.retries {
+			break
+		}
+	}
+
+	return nil, fmt.Errorf("failed to fetch %s: %w", resourceURL, lastErr)
+}
+
+func (c *Client) Head(ctx context.Context, resourceURL string) (ResourceMetadata, error) {
+	var lastErr error
+
+	for attempt := 0; attempt <= c.retries; attempt++ {
+		metadata, retry, err := c.headOnce(ctx, resourceURL)
+		if err == nil {
+			return metadata, nil
+		}
+		if errors.Is(err, ErrNotFound) {
+			return ResourceMetadata{}, err
+		}
+
+		lastErr = err
+		if !retry || attempt == c.retries {
+			break
+		}
+	}
+
+	return ResourceMetadata{}, fmt.Errorf("failed to head %s: %w", resourceURL, lastErr)
+}
+
+func (c *Client) DownloadToFile(ctx context.Context, resourceURL, destinationPath string, expectedSize int64) error {
+	if err := os.MkdirAll(filepath.Dir(destinationPath), 0o755); err != nil {
+		return fmt.Errorf("failed to create directory for %s: %w", destinationPath, err)
+	}
+
+	if info, err := os.Stat(destinationPath); err == nil {
+		if info.Size() == expectedSize {
+			return nil
+		}
+		if err := os.Remove(destinationPath); err != nil {
+			return fmt.Errorf("failed to remove size-mismatched file %s: %w", destinationPath, err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to inspect %s: %w", destinationPath, err)
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= c.retries; attempt++ {
+		retry, err := c.downloadOnce(ctx, resourceURL, destinationPath, expectedSize)
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, ErrNotFound) {
+			return err
+		}
+
+		lastErr = err
+		if !retry || attempt == c.retries {
+			break
+		}
+	}
+
+	return fmt.Errorf("failed to download %s: %w", resourceURL, lastErr)
+}
+
+func (c *Client) fetchOnce(ctx context.Context, resourceURL string) ([]byte, bool, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, resourceURL, nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to create request for %s: %w", resourceURL, err)
+	}
+
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return nil, true, err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode == http.StatusNotFound {
+		return nil, false, ErrNotFound
+	}
+	if isRetryableStatus(response.StatusCode) {
+		return nil, true, fmt.Errorf("received retryable status %d for %s", response.StatusCode, resourceURL)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, false, fmt.Errorf("received status %d for %s", response.StatusCode, resourceURL)
+	}
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, true, fmt.Errorf("failed to read response body for %s: %w", resourceURL, err)
+	}
+
+	return body, false, nil
+}
+
+func (c *Client) headOnce(ctx context.Context, resourceURL string) (ResourceMetadata, bool, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodHead, resourceURL, nil)
+	if err != nil {
+		return ResourceMetadata{}, false, fmt.Errorf("failed to create request for %s: %w", resourceURL, err)
+	}
+
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return ResourceMetadata{}, true, err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode == http.StatusNotFound {
+		return ResourceMetadata{}, false, ErrNotFound
+	}
+	if isRetryableStatus(response.StatusCode) {
+		return ResourceMetadata{}, true, fmt.Errorf("received retryable status %d for %s", response.StatusCode, resourceURL)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return ResourceMetadata{}, false, fmt.Errorf("received status %d for %s", response.StatusCode, resourceURL)
+	}
+	if response.ContentLength < 0 {
+		return ResourceMetadata{}, false, fmt.Errorf("content-length header is missing for %s", resourceURL)
+	}
+
+	return ResourceMetadata{ContentLength: response.ContentLength}, false, nil
+}
+
+func (c *Client) downloadOnce(ctx context.Context, resourceURL, destinationPath string, expectedSize int64) (bool, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, resourceURL, nil)
+	if err != nil {
+		return false, fmt.Errorf("failed to create request for %s: %w", resourceURL, err)
+	}
+
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return true, err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode == http.StatusNotFound {
+		return false, ErrNotFound
+	}
+	if isRetryableStatus(response.StatusCode) {
+		return true, fmt.Errorf("received retryable status %d for %s", response.StatusCode, resourceURL)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return false, fmt.Errorf("received status %d for %s", response.StatusCode, resourceURL)
+	}
+
+	tempPath := destinationPath + ".tmp"
+	file, err := os.Create(tempPath)
+	if err != nil {
+		return false, fmt.Errorf("failed to create temp file %s: %w", tempPath, err)
+	}
+
+	written, err := io.Copy(file, response.Body)
+	if err != nil {
+		_ = file.Close()
+		_ = os.Remove(tempPath)
+		return true, fmt.Errorf("failed to write temp file %s: %w", tempPath, err)
+	}
+	if written != expectedSize {
+		_ = file.Close()
+		_ = os.Remove(tempPath)
+		return true, fmt.Errorf("downloaded size mismatch for %s: expected=%d actual=%d", resourceURL, expectedSize, written)
+	}
+
+	if err := file.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return false, fmt.Errorf("failed to close temp file %s: %w", tempPath, err)
+	}
+
+	if err := os.Rename(tempPath, destinationPath); err != nil {
+		_ = os.Remove(tempPath)
+		return false, fmt.Errorf("failed to move temp file to %s: %w", destinationPath, err)
+	}
+
+	return false, nil
+}
+
+func isRetryableStatus(statusCode int) bool {
+	return statusCode == http.StatusTooManyRequests ||
+		statusCode == http.StatusRequestTimeout ||
+		statusCode == http.StatusTooEarly ||
+		statusCode >= 500
+}

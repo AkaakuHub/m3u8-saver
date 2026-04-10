@@ -1,0 +1,110 @@
+name: build-release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      build-type:
+        description: "manual override of build type"
+        required: false
+        default: "release"
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate tag
+        run: |
+          if [[ "${GITHUB_REF_NAME}" != v* ]]; then
+            echo "Git tag must start with v."
+            exit 1
+          fi
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes ""
+
+  build:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+    needs: create-release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            archive_extension: tar.gz
+            binary_extension: ""
+          - goos: linux
+            goarch: arm64
+            archive_extension: tar.gz
+            binary_extension: ""
+          - goos: darwin
+            goarch: amd64
+            archive_extension: tar.gz
+            binary_extension: ""
+          - goos: darwin
+            goarch: arm64
+            archive_extension: tar.gz
+            binary_extension: ""
+          - goos: windows
+            goarch: amd64
+            archive_extension: zip
+            binary_extension: ".exe"
+          - goos: windows
+            goarch: arm64
+            archive_extension: zip
+            binary_extension: ".exe"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build binary
+        env:
+          CGO_ENABLED: "0"
+          GOARCH: ${{ matrix.goarch }}
+          GOOS: ${{ matrix.goos }}
+        run: |
+          mkdir -p dist
+          binary_name="m3u8-saver-${GOOS}-${GOARCH}${{ matrix.binary_extension }}"
+          go build -trimpath -ldflags="-s -w" -o "dist/${binary_name}" ./cmd/m3u8-saver
+
+      - name: Package archive
+        run: |
+          archive_name="m3u8-saver-${{ matrix.goos }}-${{ matrix.goarch }}"
+          binary_name="${archive_name}${{ matrix.binary_extension }}"
+
+          if [ "${{ matrix.archive_extension }}" = "zip" ]; then
+            cd dist
+            zip "${archive_name}.zip" "${binary_name}"
+          else
+            tar -C dist -czf "dist/${archive_name}.tar.gz" "${binary_name}"
+          fi
+
+      - name: Upload release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            "dist/m3u8-saver-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.archive_extension }}" \
+            --clobber

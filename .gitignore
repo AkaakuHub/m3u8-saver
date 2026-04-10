@@ -1,0 +1,13 @@
+config.json
+
+# local outputs
+archive/
+
+# build artifacts
+/m3u8-saver
+*.exe
+*.test
+*.out
+
+# OS files
+.DS_Store
