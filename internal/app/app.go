@@ -19,6 +19,7 @@ import (
 	"m3u8-saver/internal/downloader"
 	"m3u8-saver/internal/hls"
 	"m3u8-saver/internal/notify"
+	"m3u8-saver/internal/state"
 	"m3u8-saver/internal/ui"
 )
 
@@ -28,6 +29,7 @@ type App struct {
 	client   *downloader.Client
 	notifier *notify.DiscordWebhook
 	progress *ui.Progress
+	state    *state.Store
 }
 
 type dateResult struct {
@@ -67,9 +69,6 @@ func New(cfg config.Config, output io.Writer) (*App, error) {
 		client: downloader.New(timeout, cfg.RetryCount),
 	}
 	ui.ConfigureColor(output)
-	if !cfg.DryRun {
-		application.progress = ui.NewProgress(output)
-	}
 
 	if cfg.Discord != nil {
 		application.notifier = notify.NewDiscordWebhook(cfg.Discord.WebhookURL, timeout)
@@ -85,10 +84,15 @@ func (a *App) Run(ctx context.Context) error {
 	}
 
 	if !a.config.DryRun {
-		if err := os.MkdirAll(a.config.OutDir, 0o755); err != nil {
-			return fmt.Errorf("failed to create outDir: %w", err)
+		if err := a.initializePersistence(); err != nil {
+			return err
 		}
 	}
+	defer func() {
+		if a.state != nil {
+			_ = a.state.Close()
+		}
+	}()
 
 	jobs := make(chan string)
 	results := make(chan dateResult)
@@ -184,6 +188,14 @@ func (a *App) processDate(ctx context.Context, day string) dateResult {
 		return a.processDryRun(ctx, index, dateText, targetURL)
 	}
 
+	alreadyArchived, err := a.state.Has(dateText)
+	if err != nil {
+		return dateResult{Index: index, Date: dateText, Status: "failed", Err: err}
+	}
+	if alreadyArchived {
+		return dateResult{Index: index, Date: dateText, Status: "skipped"}
+	}
+
 	plan, err := a.buildRemotePlan(ctx, targetURL)
 	if err != nil {
 		if errors.Is(err, downloader.ErrNotFound) {
@@ -193,6 +205,9 @@ func (a *App) processDate(ctx context.Context, day string) dateResult {
 	}
 
 	if err := a.saveDate(ctx, dateText, plan); err != nil {
+		return dateResult{Index: index, Date: dateText, Status: "failed", Err: err}
+	}
+	if err := a.state.Mark(dateText); err != nil {
 		return dateResult{Index: index, Date: dateText, Status: "failed", Err: err}
 	}
 
@@ -502,6 +517,26 @@ func parseJob(value string) (int, string, error) {
 	}
 
 	return index, parts[1], nil
+}
+
+func (a *App) initializePersistence() error {
+	if err := os.MkdirAll(a.config.OutDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create outDir: %w", err)
+	}
+	if a.progress == nil {
+		a.progress = ui.NewProgress(a.output)
+	}
+	if a.state != nil {
+		return nil
+	}
+
+	store, err := state.Open(a.config.OutDir)
+	if err != nil {
+		return err
+	}
+	a.state = store
+
+	return nil
 }
 
 func (a *App) sendDiscordSafely(ctx context.Context, content string) {
