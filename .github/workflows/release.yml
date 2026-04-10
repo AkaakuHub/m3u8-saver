@@ -47,27 +47,21 @@ jobs:
         include:
           - goos: linux
             goarch: amd64
-            archive_extension: tar.gz
             binary_extension: ""
           - goos: linux
             goarch: arm64
-            archive_extension: tar.gz
             binary_extension: ""
           - goos: darwin
             goarch: amd64
-            archive_extension: tar.gz
             binary_extension: ""
           - goos: darwin
             goarch: arm64
-            archive_extension: tar.gz
             binary_extension: ""
           - goos: windows
             goarch: amd64
-            archive_extension: zip
             binary_extension: ".exe"
           - goos: windows
             goarch: arm64
-            archive_extension: zip
             binary_extension: ".exe"
 
     steps:
@@ -93,18 +87,18 @@ jobs:
         run: |
           archive_name="m3u8-saver-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}"
           binary_name="m3u8-saver${{ matrix.binary_extension }}"
+          package_dir="dist/${archive_name}"
 
-          if [ "${{ matrix.archive_extension }}" = "zip" ]; then
-            cd dist
-            zip "${archive_name}.zip" "${binary_name}"
-          else
-            tar -C dist -czf "dist/${archive_name}.tar.gz" "${binary_name}"
-          fi
+          mkdir -p "${package_dir}"
+          cp "dist/${binary_name}" "${package_dir}/${binary_name}"
+          cp "config.example.json" "${package_dir}/config.example.json"
+          cd dist
+          zip -r "${archive_name}.zip" "${archive_name}"
 
       - name: Upload release asset
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${GITHUB_REF_NAME}" \
-            "dist/m3u8-saver-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.archive_extension }}" \
+            "dist/m3u8-saver-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.zip" \
             --clobber
