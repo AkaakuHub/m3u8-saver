@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 )
+
+var ErrRateLimited = errors.New("discord webhook rate limited")
 
 type DiscordWebhook struct {
 	webhookURL string
@@ -41,6 +44,9 @@ func (d *DiscordWebhook) Send(ctx context.Context, content string) error {
 	}
 	defer response.Body.Close()
 
+	if response.StatusCode == http.StatusTooManyRequests {
+		return ErrRateLimited
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fmt.Errorf("discord webhook returned status %d", response.StatusCode)
 	}

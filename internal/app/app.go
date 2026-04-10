@@ -66,6 +66,7 @@ func New(cfg config.Config, output io.Writer) (*App, error) {
 		output: output,
 		client: downloader.New(timeout, cfg.RetryCount),
 	}
+	ui.ConfigureColor(output)
 	if !cfg.DryRun {
 		application.progress = ui.NewProgress(output)
 	}
@@ -149,10 +150,8 @@ func (a *App) Run(ctx context.Context) error {
 			nextResultIndex++
 		}
 
-		if a.shouldSendPeriodicDiscord(counts.Processed) {
-			if err := a.notifier.Send(ctx, a.summaryLine("progress", counts, total)); err != nil {
-				return err
-			}
+		if a.shouldSendPeriodicDiscord(counts.Succeeded) {
+			a.sendDiscordSafely(ctx, a.summaryLine("progress", counts, total))
 		}
 	}
 
@@ -162,10 +161,8 @@ func (a *App) Run(ctx context.Context) error {
 
 	fmt.Fprintln(a.output, a.summaryLine("completed", counts, total))
 
-	if !a.config.DryRun && a.notifier != nil {
-		if err := a.notifier.Send(ctx, a.summaryLine("completed", counts, total)); err != nil {
-			return err
-		}
+	if counts.Succeeded > 0 {
+		a.sendDiscordSafely(ctx, a.summaryLine("completed", counts, total))
 	}
 
 	if counts.Failed > 0 {
@@ -398,12 +395,12 @@ func (a *App) downloadMediaFiles(ctx context.Context, dayDir string, files []fil
 	return localPaths, nil
 }
 
-func (a *App) shouldSendPeriodicDiscord(processed int) bool {
+func (a *App) shouldSendPeriodicDiscord(succeeded int) bool {
 	return !a.config.DryRun &&
 		a.notifier != nil &&
 		a.config.Discord != nil &&
-		processed > 0 &&
-		processed%a.config.Discord.NotifyEvery == 0
+		succeeded > 0 &&
+		succeeded%a.config.Discord.NotifyEvery == 0
 }
 
 func (a *App) summaryLine(prefix string, counts counters, total int) string {
@@ -500,4 +497,18 @@ func parseJob(value string) (int, string, error) {
 	}
 
 	return index, parts[1], nil
+}
+
+func (a *App) sendDiscordSafely(ctx context.Context, content string) {
+	if a.notifier == nil {
+		return
+	}
+
+	if err := a.notifier.Send(ctx, content); err != nil {
+		if errors.Is(err, notify.ErrRateLimited) {
+			fmt.Fprintln(a.output, ui.SkippedLabel("discord", "rate limited"))
+			return
+		}
+		fmt.Fprintln(a.output, ui.FailedLabel("discord", err))
+	}
 }

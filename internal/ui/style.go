@@ -2,8 +2,11 @@ package ui
 
 import (
 	"fmt"
+	"io"
+	"os"
 
 	"github.com/fatih/color"
+	"github.com/mattn/go-isatty"
 )
 
 var (
@@ -12,6 +15,16 @@ var (
 	failedColor   = color.New(color.FgRed)
 	skippedColor  = color.New(color.FgYellow)
 )
+
+func ConfigureColor(output io.Writer) {
+	file, ok := output.(*os.File)
+	if !ok {
+		color.NoColor = true
+		return
+	}
+
+	color.NoColor = !isatty.IsTerminal(file.Fd()) && !isatty.IsCygwinTerminal(file.Fd())
+}
 
 func SuccessLabel(date, status string) string {
 	return successColor.Sprintf("%s %s", date, status)
