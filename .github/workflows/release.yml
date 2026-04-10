@@ -86,13 +86,13 @@ jobs:
           GOOS: ${{ matrix.goos }}
         run: |
           mkdir -p dist
-          binary_name="m3u8-saver-${GOOS}-${GOARCH}${{ matrix.binary_extension }}"
+          binary_name="m3u8-saver${{ matrix.binary_extension }}"
           go build -trimpath -ldflags="-s -w" -o "dist/${binary_name}" ./cmd/m3u8-saver
 
       - name: Package archive
         run: |
-          archive_name="m3u8-saver-${{ matrix.goos }}-${{ matrix.goarch }}"
-          binary_name="${archive_name}${{ matrix.binary_extension }}"
+          archive_name="m3u8-saver-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          binary_name="m3u8-saver${{ matrix.binary_extension }}"
 
           if [ "${{ matrix.archive_extension }}" = "zip" ]; then
             cd dist
@@ -106,5 +106,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${GITHUB_REF_NAME}" \
-            "dist/m3u8-saver-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.archive_extension }}" \
+            "dist/m3u8-saver-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.archive_extension }}" \
             --clobber
