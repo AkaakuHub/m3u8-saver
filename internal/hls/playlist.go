@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"net/url"
+	"path"
 	"strconv"
 	"strings"
 )
@@ -245,4 +247,30 @@ func BuildSingleVariantMaster(master MasterPlaylist) []byte {
 		master.VideoURI,
 		"",
 	}, "\n"))
+}
+
+func LocalPathFromReference(reference string) (string, error) {
+	parsedURL, err := url.Parse(reference)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse reference %s: %w", reference, err)
+	}
+	if parsedURL.IsAbs() {
+		return "", fmt.Errorf("absolute reference is not supported without playlist rewrite: %s", reference)
+	}
+	if parsedURL.RawQuery != "" {
+		return "", fmt.Errorf("reference with query string is not supported without playlist rewrite: %s", reference)
+	}
+	if parsedURL.Fragment != "" {
+		return "", fmt.Errorf("reference with fragment is not supported: %s", reference)
+	}
+
+	cleanPath := path.Clean(strings.TrimPrefix(parsedURL.Path, "/"))
+	if cleanPath == "." || cleanPath == "" {
+		return "", fmt.Errorf("reference path is empty: %s", reference)
+	}
+	if strings.HasPrefix(cleanPath, "../") {
+		return "", fmt.Errorf("reference path escapes output directory: %s", reference)
+	}
+
+	return cleanPath, nil
 }

@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -277,11 +276,11 @@ func (a *App) buildRemotePlan(ctx context.Context, masterURL string) (remotePlan
 		return remotePlan{}, err
 	}
 
-	audioPlaylistLocalPath, err := localPathFromReference(masterPlaylist.AudioURI)
+	audioPlaylistLocalPath, err := hls.LocalPathFromReference(masterPlaylist.AudioURI)
 	if err != nil {
 		return remotePlan{}, err
 	}
-	videoPlaylistLocalPath, err := localPathFromReference(masterPlaylist.VideoURI)
+	videoPlaylistLocalPath, err := hls.LocalPathFromReference(masterPlaylist.VideoURI)
 	if err != nil {
 		return remotePlan{}, err
 	}
@@ -447,7 +446,7 @@ func (a *App) buildMediaFilePlans(ctx context.Context, references, resolvedURLs 
 
 	files := make([]filePlan, 0, len(references))
 	for index, reference := range references {
-		localPath, err := localPathFromReference(reference)
+		localPath, err := hls.LocalPathFromReference(reference)
 		if err != nil {
 			return nil, err
 		}
@@ -477,32 +476,6 @@ func resolveURL(baseURL, reference string) (string, error) {
 	}
 
 	return base.ResolveReference(relative).String(), nil
-}
-
-func localPathFromReference(reference string) (string, error) {
-	parsedURL, err := url.Parse(reference)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse reference %s: %w", reference, err)
-	}
-	if parsedURL.IsAbs() {
-		return "", fmt.Errorf("absolute reference is not supported without playlist rewrite: %s", reference)
-	}
-	if parsedURL.RawQuery != "" {
-		return "", fmt.Errorf("reference with query string is not supported without playlist rewrite: %s", reference)
-	}
-	if parsedURL.Fragment != "" {
-		return "", fmt.Errorf("reference with fragment is not supported: %s", reference)
-	}
-
-	cleanPath := path.Clean(strings.TrimPrefix(parsedURL.Path, "/"))
-	if cleanPath == "." || cleanPath == "" {
-		return "", fmt.Errorf("reference path is empty: %s", reference)
-	}
-	if strings.HasPrefix(cleanPath, "../") {
-		return "", fmt.Errorf("reference path escapes output directory: %s", reference)
-	}
-
-	return cleanPath, nil
 }
 
 func parseJob(value string) (int, string, error) {
