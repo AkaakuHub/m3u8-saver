@@ -39,8 +39,21 @@ func MissingLabel(date, status string) string {
 	return missingColor.Sprintf("%s %s", date, status)
 }
 
+func IncompleteLabel(date, status string) string {
+	return missingColor.Sprintf("%s %s", date, status)
+}
+
 func FailedLabel(date string, err error) string {
 	return failedColor.Sprintf("%s failed:", date) + " " + err.Error()
+}
+
+func InventorySummaryLine(archived, scanned int) string {
+	return fmt.Sprintf(
+		"%s %s scanned=%d",
+		progressColor.Sprintf("completed"),
+		archivedColor.Sprintf("archived=%d", archived),
+		scanned,
+	)
 }
 
 func ProgressLine(prefix string, processed, total, succeeded, failed, archived, missing int) string {

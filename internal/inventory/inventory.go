@@ -10,11 +10,14 @@ import (
 
 	"m3u8-saver/internal/hls"
 	"m3u8-saver/internal/state"
+	"m3u8-saver/internal/ui"
 )
 
 var dateDirectoryPattern = regexp.MustCompile(`^\d{8}$`)
 
 func Run(outDir string, output io.Writer) error {
+	ui.ConfigureColor(output)
+
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create outDir: %w", err)
 	}
@@ -41,21 +44,21 @@ func Run(outDir string, output io.Writer) error {
 		date := filepath.Base(dateDir)
 		ok, err := isArchivedDateDirectory(dateDir)
 		if err != nil {
-			fmt.Fprintf(output, "%s failed: %v\n", date, err)
+			fmt.Fprintln(output, ui.FailedLabel(date, err))
 			continue
 		}
 		if !ok {
-			fmt.Fprintf(output, "%s incomplete\n", date)
+			fmt.Fprintln(output, ui.IncompleteLabel(date, "incomplete"))
 			continue
 		}
 		if err := store.Mark(date); err != nil {
 			return err
 		}
 		archivedCount++
-		fmt.Fprintf(output, "%s success\n", date)
+		fmt.Fprintln(output, ui.SuccessLabel(date, "success"))
 	}
 
-	fmt.Fprintf(output, "completed archived=%d scanned=%d\n", archivedCount, len(dateDirectories))
+	fmt.Fprintln(output, ui.InventorySummaryLine(archivedCount, len(dateDirectories)))
 
 	return nil
 }
