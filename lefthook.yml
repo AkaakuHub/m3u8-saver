@@ -1,12 +1,12 @@
 pre-commit:
   commands:
     format:
-      glob: "*.go"
+      glob: "**/*.go"
       run: gofmt -w {staged_files}
       stage_fixed: true
     staticcheck:
-      glob: "*.go"
+      glob: "**/*.go"
       run: go tool staticcheck ./...
     vet:
-      glob: "*.go"
+      glob: "**/*.go"
       run: go vet ./...
