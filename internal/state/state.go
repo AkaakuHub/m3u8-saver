@@ -73,6 +73,14 @@ func (s *Store) Mark(date string) error {
 	return nil
 }
 
+func (s *Store) Reset() error {
+	if _, err := s.db.Exec(`delete from archived_months`); err != nil {
+		return fmt.Errorf("failed to reset state db: %w", err)
+	}
+
+	return nil
+}
+
 func (s *Store) migrate() error {
 	_, err := s.db.Exec(`
 		create table if not exists archived_months (
