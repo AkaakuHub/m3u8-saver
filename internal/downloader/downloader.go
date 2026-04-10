@@ -22,6 +22,10 @@ type ResourceMetadata struct {
 	ContentLength int64
 }
 
+type ProgressReporter interface {
+	NewProxyReader(label string, total int64, reader io.ReadCloser) io.ReadCloser
+}
+
 func New(timeout time.Duration, retries int) *Client {
 	return &Client{
 		httpClient: &http.Client{
@@ -73,7 +77,7 @@ func (c *Client) Head(ctx context.Context, resourceURL string) (ResourceMetadata
 	return ResourceMetadata{}, fmt.Errorf("failed to head %s: %w", resourceURL, lastErr)
 }
 
-func (c *Client) DownloadToFile(ctx context.Context, resourceURL, destinationPath string, expectedSize int64) error {
+func (c *Client) DownloadToFile(ctx context.Context, resourceURL, destinationPath string, expectedSize int64, progress ProgressReporter, progressLabel string) error {
 	if err := os.MkdirAll(filepath.Dir(destinationPath), 0o755); err != nil {
 		return fmt.Errorf("failed to create directory for %s: %w", destinationPath, err)
 	}
@@ -91,7 +95,7 @@ func (c *Client) DownloadToFile(ctx context.Context, resourceURL, destinationPat
 
 	var lastErr error
 	for attempt := 0; attempt <= c.retries; attempt++ {
-		retry, err := c.downloadOnce(ctx, resourceURL, destinationPath, expectedSize)
+		retry, err := c.downloadOnce(ctx, resourceURL, destinationPath, expectedSize, progress, progressLabel)
 		if err == nil {
 			return nil
 		}
@@ -166,7 +170,7 @@ func (c *Client) headOnce(ctx context.Context, resourceURL string) (ResourceMeta
 	return ResourceMetadata{ContentLength: response.ContentLength}, false, nil
 }
 
-func (c *Client) downloadOnce(ctx context.Context, resourceURL, destinationPath string, expectedSize int64) (bool, error) {
+func (c *Client) downloadOnce(ctx context.Context, resourceURL, destinationPath string, expectedSize int64, progress ProgressReporter, progressLabel string) (bool, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, resourceURL, nil)
 	if err != nil {
 		return false, fmt.Errorf("failed to create request for %s: %w", resourceURL, err)
@@ -176,17 +180,25 @@ func (c *Client) downloadOnce(ctx context.Context, resourceURL, destinationPath 
 	if err != nil {
 		return true, err
 	}
-	defer response.Body.Close()
 
 	if response.StatusCode == http.StatusNotFound {
+		_ = response.Body.Close()
 		return false, ErrNotFound
 	}
 	if isRetryableStatus(response.StatusCode) {
+		_ = response.Body.Close()
 		return true, fmt.Errorf("received retryable status %d for %s", response.StatusCode, resourceURL)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		_ = response.Body.Close()
 		return false, fmt.Errorf("received status %d for %s", response.StatusCode, resourceURL)
 	}
+
+	reader := response.Body
+	if progress != nil {
+		reader = progress.NewProxyReader(progressLabel, expectedSize, response.Body)
+	}
+	defer reader.Close()
 
 	tempPath := destinationPath + ".tmp"
 	file, err := os.Create(tempPath)
@@ -194,7 +206,7 @@ func (c *Client) downloadOnce(ctx context.Context, resourceURL, destinationPath 
 		return false, fmt.Errorf("failed to create temp file %s: %w", tempPath, err)
 	}
 
-	written, err := io.Copy(file, response.Body)
+	written, err := io.Copy(file, reader)
 	if err != nil {
 		_ = file.Close()
 		_ = os.Remove(tempPath)

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,9 +27,11 @@ type App struct {
 	output   io.Writer
 	client   *downloader.Client
 	notifier *notify.DiscordWebhook
+	progress *ui.Progress
 }
 
 type dateResult struct {
+	Index  int
 	Date   string
 	Status string
 	Err    error
@@ -62,6 +65,9 @@ func New(cfg config.Config, output io.Writer) (*App, error) {
 		config: cfg,
 		output: output,
 		client: downloader.New(timeout, cfg.RetryCount),
+	}
+	if !cfg.DryRun {
+		application.progress = ui.NewProgress(output)
 	}
 
 	if cfg.Discord != nil {
@@ -98,8 +104,10 @@ func (a *App) Run(ctx context.Context) error {
 	}
 
 	go func() {
+		index := 0
 		_ = date.Each(a.config.StartDate, a.config.EndDate, func(day string) error {
-			jobs <- day
+			jobs <- fmt.Sprintf("%d:%s", index, day)
+			index++
 			return nil
 		})
 		close(jobs)
@@ -107,20 +115,38 @@ func (a *App) Run(ctx context.Context) error {
 		close(results)
 	}()
 	counts := counters{}
+	pendingResults := map[int]dateResult{}
+	nextResultIndex := 0
 
 	for result := range results {
 		counts.Processed++
-
 		switch result.Status {
 		case "success":
 			counts.Succeeded++
-			fmt.Fprintln(a.output, ui.SuccessLabel(result.Date, "success"))
 		case "skipped":
 			counts.Skipped++
-			fmt.Fprintln(a.output, ui.SkippedLabel(result.Date, "skipped"))
 		default:
 			counts.Failed++
-			fmt.Fprintln(a.output, ui.FailedLabel(result.Date, result.Err))
+		}
+		pendingResults[result.Index] = result
+
+		for {
+			pendingResult, exists := pendingResults[nextResultIndex]
+			if !exists {
+				break
+			}
+
+			switch pendingResult.Status {
+			case "success":
+				fmt.Fprintln(a.output, ui.SuccessLabel(pendingResult.Date, "success"))
+			case "skipped":
+				fmt.Fprintln(a.output, ui.SkippedLabel(pendingResult.Date, "skipped"))
+			default:
+				fmt.Fprintln(a.output, ui.FailedLabel(pendingResult.Date, pendingResult.Err))
+			}
+
+			delete(pendingResults, nextResultIndex)
+			nextResultIndex++
 		}
 
 		if a.shouldSendPeriodicDiscord(counts.Processed) {
@@ -128,6 +154,10 @@ func (a *App) Run(ctx context.Context) error {
 				return err
 			}
 		}
+	}
+
+	if a.progress != nil {
+		a.progress.Wait()
 	}
 
 	fmt.Fprintln(a.output, a.summaryLine("completed", counts, total))
@@ -146,40 +176,45 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) processDate(ctx context.Context, day string) dateResult {
-	targetURL := strings.ReplaceAll(a.config.URLTemplate, "{yyyymmdd}", day)
+	index, dateText, err := parseJob(day)
+	if err != nil {
+		return dateResult{Date: day, Status: "failed", Err: err}
+	}
+
+	targetURL := strings.ReplaceAll(a.config.URLTemplate, "{yyyymmdd}", dateText)
 
 	if a.config.DryRun {
-		return a.processDryRun(ctx, day, targetURL)
+		return a.processDryRun(ctx, index, dateText, targetURL)
 	}
 
 	plan, err := a.buildRemotePlan(ctx, targetURL)
 	if err != nil {
 		if errors.Is(err, downloader.ErrNotFound) {
-			return dateResult{Date: day, Status: "skipped"}
+			return dateResult{Index: index, Date: dateText, Status: "skipped"}
 		}
-		return dateResult{Date: day, Status: "failed", Err: err}
+		return dateResult{Index: index, Date: dateText, Status: "failed", Err: err}
 	}
 
-	if err := a.saveDate(ctx, day, plan); err != nil {
-		return dateResult{Date: day, Status: "failed", Err: err}
+	if err := a.saveDate(ctx, dateText, plan); err != nil {
+		return dateResult{Index: index, Date: dateText, Status: "failed", Err: err}
 	}
 
-	return dateResult{Date: day, Status: "success"}
+	return dateResult{Index: index, Date: dateText, Status: "success"}
 }
 
-func (a *App) processDryRun(ctx context.Context, day, targetURL string) dateResult {
+func (a *App) processDryRun(ctx context.Context, index int, day, targetURL string) dateResult {
 	body, err := a.client.Fetch(ctx, targetURL)
 	if err != nil {
 		if errors.Is(err, downloader.ErrNotFound) {
-			return dateResult{Date: day, Status: "skipped"}
+			return dateResult{Index: index, Date: day, Status: "skipped"}
 		}
-		return dateResult{Date: day, Status: "failed", Err: err}
+		return dateResult{Index: index, Date: day, Status: "failed", Err: err}
 	}
 	if !hls.IsPlaylist(body) {
-		return dateResult{Date: day, Status: "failed", Err: fmt.Errorf("index.m3u8 is not a valid playlist")}
+		return dateResult{Index: index, Date: day, Status: "failed", Err: fmt.Errorf("index.m3u8 is not a valid playlist")}
 	}
 
-	return dateResult{Date: day, Status: "success"}
+	return dateResult{Index: index, Date: day, Status: "success"}
 }
 
 func (a *App) buildRemotePlan(ctx context.Context, masterURL string) (remotePlan, error) {
@@ -352,7 +387,8 @@ func (a *App) downloadMediaFiles(ctx context.Context, dayDir string, files []fil
 	localPaths := make([]string, 0, len(files))
 	for _, file := range files {
 		destinationPath := filepath.Join(dayDir, filepath.FromSlash(file.LocalPath))
-		if err := a.client.DownloadToFile(ctx, file.RemoteURL, destinationPath, file.ExpectedSize); err != nil {
+		progressLabel := fmt.Sprintf("%s/%s", filepath.Base(dayDir), file.LocalPath)
+		if err := a.client.DownloadToFile(ctx, file.RemoteURL, destinationPath, file.ExpectedSize, a.progress, progressLabel); err != nil {
 			return nil, err
 		}
 
@@ -450,4 +486,18 @@ func localPathFromReference(reference string) (string, error) {
 	}
 
 	return cleanPath, nil
+}
+
+func parseJob(value string) (int, string, error) {
+	parts := strings.SplitN(value, ":", 2)
+	if len(parts) != 2 {
+		return 0, "", fmt.Errorf("invalid job value: %s", value)
+	}
+
+	index, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, "", fmt.Errorf("invalid job index: %w", err)
+	}
+
+	return index, parts[1], nil
 }
