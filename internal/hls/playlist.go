@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -21,10 +22,16 @@ func ParseMaster(body []byte) (MasterPlaylist, error) {
 		return MasterPlaylist{}, fmt.Errorf("master playlist is not a valid m3u8 file")
 	}
 
+	// Observed master playlists use multiple audio and video variants for quality levels.
+	// Audio selection is strict: prefer the single DEFAULT=YES track, otherwise require a single track.
+	// Video selection is strict: choose the variant with the highest BANDWIDTH.
 	scanner := bufio.NewScanner(bytes.NewReader(body))
-	var audioURI string
+	audioCandidates := make([]string, 0, 2)
+	defaultAudioCandidates := make([]string, 0, 1)
 	var videoURI string
+	var highestBandwidth int
 	expectVideoURI := false
+	currentBandwidth := 0
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -37,23 +44,38 @@ func ParseMaster(body []byte) (MasterPlaylist, error) {
 			if err != nil {
 				return MasterPlaylist{}, err
 			}
-			audioURI = uri
+			audioCandidates = append(audioCandidates, uri)
+			if strings.Contains(line, "DEFAULT=YES") {
+				defaultAudioCandidates = append(defaultAudioCandidates, uri)
+			}
 			continue
 		}
 
 		if strings.HasPrefix(line, "#EXT-X-STREAM-INF:") {
+			bandwidth, err := readIntAttribute(line, "BANDWIDTH")
+			if err != nil {
+				return MasterPlaylist{}, err
+			}
+			currentBandwidth = bandwidth
 			expectVideoURI = true
 			continue
 		}
 
 		if expectVideoURI && !strings.HasPrefix(line, "#") {
-			videoURI = line
+			if videoURI == "" || currentBandwidth > highestBandwidth {
+				videoURI = line
+				highestBandwidth = currentBandwidth
+			}
 			expectVideoURI = false
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		return MasterPlaylist{}, fmt.Errorf("failed to read master playlist: %w", err)
+	}
+	audioURI, err := selectAudioURI(audioCandidates, defaultAudioCandidates)
+	if err != nil {
+		return MasterPlaylist{}, err
 	}
 	if audioURI == "" {
 		return MasterPlaylist{}, fmt.Errorf("audio playlist URI was not found in master playlist")
@@ -133,6 +155,63 @@ func readQuotedAttribute(line, key string) (string, error) {
 	valueEnd := strings.Index(line[valueStart:], "\"")
 	if valueEnd == -1 {
 		return "", fmt.Errorf("%s attribute is not closed in line: %s", key, line)
+	}
+
+	return line[valueStart : valueStart+valueEnd], nil
+}
+
+func selectAudioURI(audioCandidates, defaultAudioCandidates []string) (string, error) {
+	switch {
+	case len(defaultAudioCandidates) == 1:
+		return defaultAudioCandidates[0], nil
+	case len(defaultAudioCandidates) > 1:
+		return "", fmt.Errorf("multiple default audio playlists were found in master playlist")
+	case len(audioCandidates) == 1:
+		return audioCandidates[0], nil
+	case len(audioCandidates) == 0:
+		return "", nil
+	default:
+		return "", fmt.Errorf("audio playlist selection is ambiguous without DEFAULT=YES")
+	}
+}
+
+func readIntAttribute(line, key string) (int, error) {
+	value, err := readAttributeValue(line, key)
+	if err != nil {
+		return 0, err
+	}
+
+	number, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s attribute is not a valid integer in line: %s", key, line)
+	}
+
+	return number, nil
+}
+
+func readAttributeValue(line, key string) (string, error) {
+	pattern := key + "="
+	start := strings.Index(line, pattern)
+	if start == -1 {
+		return "", fmt.Errorf("%s attribute was not found in line: %s", key, line)
+	}
+
+	valueStart := start + len(pattern)
+	if valueStart >= len(line) {
+		return "", fmt.Errorf("%s attribute is empty in line: %s", key, line)
+	}
+
+	if line[valueStart] == '"' {
+		valueEnd := strings.Index(line[valueStart+1:], "\"")
+		if valueEnd == -1 {
+			return "", fmt.Errorf("%s attribute is not closed in line: %s", key, line)
+		}
+		return line[valueStart+1 : valueStart+1+valueEnd], nil
+	}
+
+	valueEnd := strings.Index(line[valueStart:], ",")
+	if valueEnd == -1 {
+		return line[valueStart:], nil
 	}
 
 	return line[valueStart : valueStart+valueEnd], nil
