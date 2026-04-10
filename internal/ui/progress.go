@@ -28,7 +28,6 @@ func (p *Progress) NewProxyReader(label string, total int64, reader io.ReadClose
 
 	bar := p.pool.AddBar(
 		total,
-		mpb.BarRemoveOnComplete(),
 		mpb.PrependDecorators(
 			decor.Name(label+" "),
 			decor.CountersKibiByte("% .1f / % .1f"),
