@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -29,7 +30,14 @@ type ProgressReporter interface {
 func New(timeout time.Duration, retries int) *Client {
 	return &Client{
 		httpClient: &http.Client{
-			Timeout: timeout,
+			Transport: &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+				DialContext: (&net.Dialer{
+					Timeout: timeout,
+				}).DialContext,
+				ResponseHeaderTimeout: timeout,
+				TLSHandshakeTimeout:   timeout,
+			},
 		},
 		retries: retries,
 	}
