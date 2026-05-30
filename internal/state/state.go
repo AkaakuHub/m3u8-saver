@@ -37,12 +37,20 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func (s *Store) Has(date string) (bool, error) {
-	yearMonth, mask, err := parts(date)
-	if err != nil {
-		return false, err
+func (s *Store) Has(key string) (bool, error) {
+	var exists int
+	err := s.db.QueryRow(`select 1 from archived_targets where key = ?`, key).Scan(&exists)
+	if err == nil {
+		return true, nil
+	}
+	if err != sql.ErrNoRows {
+		return false, fmt.Errorf("failed to query archived target: %w", err)
 	}
 
+	yearMonth, mask, err := parts(key)
+	if err != nil {
+		return false, nil
+	}
 	var daysMask int64
 	err = s.db.QueryRow(`select days_mask from archived_months where year_month = ?`, yearMonth).Scan(&daysMask)
 	if err == sql.ErrNoRows {
@@ -55,10 +63,14 @@ func (s *Store) Has(date string) (bool, error) {
 	return daysMask&mask != 0, nil
 }
 
-func (s *Store) Mark(date string) error {
-	yearMonth, mask, err := parts(date)
+func (s *Store) Mark(key string) error {
+	if _, err := s.db.Exec(`insert or ignore into archived_targets(key) values (?)`, key); err != nil {
+		return fmt.Errorf("failed to mark archived target: %w", err)
+	}
+
+	yearMonth, mask, err := parts(key)
 	if err != nil {
-		return err
+		return nil
 	}
 
 	_, err = s.db.Exec(`
@@ -77,6 +89,9 @@ func (s *Store) Reset() error {
 	if _, err := s.db.Exec(`delete from archived_months`); err != nil {
 		return fmt.Errorf("failed to reset state db: %w", err)
 	}
+	if _, err := s.db.Exec(`delete from archived_targets`); err != nil {
+		return fmt.Errorf("failed to reset target state db: %w", err)
+	}
 
 	return nil
 }
@@ -90,6 +105,14 @@ func (s *Store) migrate() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to migrate state db: %w", err)
+	}
+	_, err = s.db.Exec(`
+		create table if not exists archived_targets (
+			key text primary key
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to migrate target state db: %w", err)
 	}
 
 	return nil

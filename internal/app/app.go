@@ -8,13 +8,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"m3u8-saver/internal/config"
-	"m3u8-saver/internal/date"
 	"m3u8-saver/internal/downloader"
 	"m3u8-saver/internal/hls"
 	"m3u8-saver/internal/notify"
@@ -35,7 +32,7 @@ type App struct {
 
 type dateResult struct {
 	Index  int
-	Date   string
+	Label  string
 	Status status.Type
 	Err    error
 }
@@ -80,10 +77,11 @@ func New(cfg config.Config, output io.Writer) (*App, error) {
 }
 
 func (a *App) Run(ctx context.Context) error {
-	total, err := date.Count(a.config.StartDate, a.config.EndDate)
+	targets, err := buildTargets(a.config)
 	if err != nil {
 		return err
 	}
+	total := len(targets)
 
 	if !a.config.DryRun {
 		if err := a.initializePersistence(); err != nil {
@@ -96,7 +94,7 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}()
 
-	jobs := make(chan string)
+	jobs := make(chan target)
 	results := make(chan dateResult)
 
 	var workers sync.WaitGroup
@@ -104,19 +102,16 @@ func (a *App) Run(ctx context.Context) error {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			for day := range jobs {
-				results <- a.processDate(ctx, day)
+			for current := range jobs {
+				results <- a.processTarget(ctx, current)
 			}
 		}()
 	}
 
 	go func() {
-		index := 0
-		_ = date.Each(a.config.StartDate, a.config.EndDate, func(day string) error {
-			jobs <- fmt.Sprintf("%d:%s", index, day)
-			index++
-			return nil
-		})
+		for _, current := range targets {
+			jobs <- current
+		}
 		close(jobs)
 		workers.Wait()
 		close(results)
@@ -147,13 +142,13 @@ func (a *App) Run(ctx context.Context) error {
 
 			switch pendingResult.Status {
 			case status.Success:
-				a.writeResultLine(ui.SuccessLabel(pendingResult.Date, status.Success))
+				a.writeResultLine(ui.SuccessLabel(pendingResult.Label, status.Success))
 			case status.Archived:
-				a.writeResultLine(ui.ArchivedLabel(pendingResult.Date, status.Archived))
+				a.writeResultLine(ui.ArchivedLabel(pendingResult.Label, status.Archived))
 			case status.Missing:
-				a.writeResultLine(ui.MissingLabel(pendingResult.Date, status.NotFound))
+				a.writeResultLine(ui.MissingLabel(pendingResult.Label, status.NotFound))
 			default:
-				a.writeResultLine(ui.FailedLabel(pendingResult.Date, pendingResult.Err))
+				a.writeResultLine(ui.FailedLabel(pendingResult.Label, pendingResult.Err))
 			}
 
 			delete(pendingResults, nextResultIndex)
@@ -184,57 +179,50 @@ func (a *App) Run(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) processDate(ctx context.Context, day string) dateResult {
-	index, dateText, err := parseJob(day)
-	if err != nil {
-		return dateResult{Date: day, Status: status.Failed, Err: err}
-	}
-
-	targetURL := strings.ReplaceAll(a.config.URLTemplate, "{yyyymmdd}", dateText)
-
+func (a *App) processTarget(ctx context.Context, current target) dateResult {
 	if a.config.DryRun {
-		return a.processDryRun(ctx, index, dateText, targetURL)
+		return a.processDryRun(ctx, current)
 	}
 
-	alreadyArchived, err := a.state.Has(dateText)
+	alreadyArchived, err := a.state.Has(current.StateKey)
 	if err != nil {
-		return dateResult{Index: index, Date: dateText, Status: status.Failed, Err: err}
+		return dateResult{Index: current.Index, Label: current.Label, Status: status.Failed, Err: err}
 	}
 	if alreadyArchived {
-		return dateResult{Index: index, Date: dateText, Status: status.Archived}
+		return dateResult{Index: current.Index, Label: current.Label, Status: status.Archived}
 	}
 
-	plan, err := a.buildRemotePlan(ctx, targetURL)
+	plan, err := a.buildRemotePlan(ctx, current.URL)
 	if err != nil {
 		if errors.Is(err, downloader.ErrNotFound) {
-			return dateResult{Index: index, Date: dateText, Status: status.Missing}
+			return dateResult{Index: current.Index, Label: current.Label, Status: status.Missing}
 		}
-		return dateResult{Index: index, Date: dateText, Status: status.Failed, Err: err}
+		return dateResult{Index: current.Index, Label: current.Label, Status: status.Failed, Err: err}
 	}
 
-	if err := a.saveDate(ctx, dateText, plan); err != nil {
-		return dateResult{Index: index, Date: dateText, Status: status.Failed, Err: err}
+	if err := a.saveTarget(ctx, current, plan); err != nil {
+		return dateResult{Index: current.Index, Label: current.Label, Status: status.Failed, Err: err}
 	}
-	if err := a.state.Mark(dateText); err != nil {
-		return dateResult{Index: index, Date: dateText, Status: status.Failed, Err: err}
+	if err := a.state.Mark(current.StateKey); err != nil {
+		return dateResult{Index: current.Index, Label: current.Label, Status: status.Failed, Err: err}
 	}
 
-	return dateResult{Index: index, Date: dateText, Status: status.Success}
+	return dateResult{Index: current.Index, Label: current.Label, Status: status.Success}
 }
 
-func (a *App) processDryRun(ctx context.Context, index int, day, targetURL string) dateResult {
-	body, err := a.client.Fetch(ctx, targetURL)
+func (a *App) processDryRun(ctx context.Context, current target) dateResult {
+	body, err := a.client.Fetch(ctx, current.URL)
 	if err != nil {
 		if errors.Is(err, downloader.ErrNotFound) {
-			return dateResult{Index: index, Date: day, Status: status.Missing}
+			return dateResult{Index: current.Index, Label: current.Label, Status: status.Missing}
 		}
-		return dateResult{Index: index, Date: day, Status: status.Failed, Err: err}
+		return dateResult{Index: current.Index, Label: current.Label, Status: status.Failed, Err: err}
 	}
 	if !hls.IsPlaylist(body) {
-		return dateResult{Index: index, Date: day, Status: status.Failed, Err: fmt.Errorf("index.m3u8 is not a valid playlist")}
+		return dateResult{Index: current.Index, Label: current.Label, Status: status.Failed, Err: fmt.Errorf("index.m3u8 is not a valid playlist")}
 	}
 
-	return dateResult{Index: index, Date: day, Status: status.Success}
+	return dateResult{Index: current.Index, Label: current.Label, Status: status.Success}
 }
 
 func (a *App) buildRemotePlan(ctx context.Context, masterURL string) (remotePlan, error) {
@@ -326,34 +314,34 @@ func (a *App) buildRemotePlan(ctx context.Context, masterURL string) (remotePlan
 	}, nil
 }
 
-func (a *App) saveDate(ctx context.Context, day string, plan remotePlan) error {
-	dayDir := filepath.Join(a.config.OutDir, day)
-	if err := os.MkdirAll(dayDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create day directory %s: %w", dayDir, err)
+func (a *App) saveTarget(ctx context.Context, current target, plan remotePlan) error {
+	targetDir := filepath.Join(a.config.OutDir, filepath.FromSlash(current.LocalDir))
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create target directory %s: %w", targetDir, err)
 	}
 
 	requiredFiles := make([]string, 0)
 
-	if err := a.writeIfMissing(filepath.Join(dayDir, plan.Master.LocalPath), plan.Master.Body, plan.Master.ExpectedSize); err != nil {
+	if err := a.writeIfMissing(filepath.Join(targetDir, plan.Master.LocalPath), plan.Master.Body, plan.Master.ExpectedSize); err != nil {
 		return err
 	}
-	requiredFiles = append(requiredFiles, filepath.Join(dayDir, plan.Master.LocalPath))
+	requiredFiles = append(requiredFiles, filepath.Join(targetDir, plan.Master.LocalPath))
 
-	if err := a.writeIfMissing(filepath.Join(dayDir, plan.AudioPlaylist.LocalPath), plan.AudioPlaylist.Body, plan.AudioPlaylist.ExpectedSize); err != nil {
+	if err := a.writeIfMissing(filepath.Join(targetDir, plan.AudioPlaylist.LocalPath), plan.AudioPlaylist.Body, plan.AudioPlaylist.ExpectedSize); err != nil {
 		return err
 	}
-	requiredFiles = append(requiredFiles, filepath.Join(dayDir, plan.AudioPlaylist.LocalPath))
+	requiredFiles = append(requiredFiles, filepath.Join(targetDir, plan.AudioPlaylist.LocalPath))
 
-	if err := a.writeIfMissing(filepath.Join(dayDir, plan.VideoPlaylist.LocalPath), plan.VideoPlaylist.Body, plan.VideoPlaylist.ExpectedSize); err != nil {
+	if err := a.writeIfMissing(filepath.Join(targetDir, plan.VideoPlaylist.LocalPath), plan.VideoPlaylist.Body, plan.VideoPlaylist.ExpectedSize); err != nil {
 		return err
 	}
-	requiredFiles = append(requiredFiles, filepath.Join(dayDir, plan.VideoPlaylist.LocalPath))
+	requiredFiles = append(requiredFiles, filepath.Join(targetDir, plan.VideoPlaylist.LocalPath))
 
-	audioFiles, err := a.downloadMediaFiles(ctx, dayDir, plan.AudioMedia)
+	audioFiles, err := a.downloadMediaFiles(ctx, targetDir, current.Label, plan.AudioMedia)
 	if err != nil {
 		return err
 	}
-	videoFiles, err := a.downloadMediaFiles(ctx, dayDir, plan.VideoMedia)
+	videoFiles, err := a.downloadMediaFiles(ctx, targetDir, current.Label, plan.VideoMedia)
 	if err != nil {
 		return err
 	}
@@ -404,11 +392,11 @@ func (a *App) writeIfMissing(destinationPath string, body []byte, expectedSize i
 	return nil
 }
 
-func (a *App) downloadMediaFiles(ctx context.Context, dayDir string, files []filePlan) ([]string, error) {
+func (a *App) downloadMediaFiles(ctx context.Context, targetDir, label string, files []filePlan) ([]string, error) {
 	localPaths := make([]string, 0, len(files))
 	for _, file := range files {
-		destinationPath := filepath.Join(dayDir, filepath.FromSlash(file.LocalPath))
-		progressLabel := fmt.Sprintf("%s %s", filepath.Base(dayDir), file.LocalPath)
+		destinationPath := filepath.Join(targetDir, filepath.FromSlash(file.LocalPath))
+		progressLabel := fmt.Sprintf("%s %s", label, file.LocalPath)
 		if err := a.client.DownloadToFile(ctx, file.RemoteURL, destinationPath, file.ExpectedSize, a.progress, progressLabel); err != nil {
 			return nil, err
 		}
@@ -485,20 +473,6 @@ func resolveURL(baseURL, reference string) (string, error) {
 	}
 
 	return base.ResolveReference(relative).String(), nil
-}
-
-func parseJob(value string) (int, string, error) {
-	parts := strings.SplitN(value, ":", 2)
-	if len(parts) != 2 {
-		return 0, "", fmt.Errorf("invalid job value: %s", value)
-	}
-
-	index, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return 0, "", fmt.Errorf("invalid job index: %w", err)
-	}
-
-	return index, parts[1], nil
 }
 
 func (a *App) initializePersistence() error {

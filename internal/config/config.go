@@ -12,7 +12,8 @@ import (
 const dateLayout = "20060102"
 
 type Config struct {
-	URLTemplate       string         `json:"urlTemplate"`
+	BaseURL           string         `json:"baseUrl"`
+	ArchiveJSONPath   string         `json:"archiveJsonPath"`
 	StartDate         string         `json:"startDate"`
 	EndDate           string         `json:"endDate"`
 	OutDir            string         `json:"outDir"`
@@ -51,11 +52,11 @@ func Load(path string) (Config, error) {
 }
 
 func (c Config) Validate() error {
-	if c.URLTemplate == "" {
-		return fmt.Errorf("urlTemplate is required")
+	if c.BaseURL == "" {
+		return fmt.Errorf("baseUrl is required")
 	}
-	if !strings.Contains(c.URLTemplate, "{yyyymmdd}") {
-		return fmt.Errorf("urlTemplate must include {yyyymmdd}")
+	if !strings.HasPrefix(c.BaseURL, "http://") && !strings.HasPrefix(c.BaseURL, "https://") {
+		return fmt.Errorf("baseUrl must be an absolute http(s) URL")
 	}
 	if c.OutDir == "" {
 		return fmt.Errorf("outDir is required")
