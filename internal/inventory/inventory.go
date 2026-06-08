@@ -106,44 +106,25 @@ func isArchivedTargetDirectory(targetDir string) (bool, error) {
 		return false, err
 	}
 
-	audioPlaylistPath, err := hls.LocalPathFromReference(master.AudioURI)
-	if err != nil {
-		return false, err
-	}
-	videoPlaylistPath, err := hls.LocalPathFromReference(master.VideoURI)
-	if err != nil {
-		return false, err
-	}
-
-	audioPlaylistBody, err := os.ReadFile(filepath.Join(targetDir, filepath.FromSlash(audioPlaylistPath)))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
+	for _, reference := range master.References() {
+		playlistPath, err := hls.LocalPathFromReference(reference)
+		if err != nil {
+			return false, err
 		}
-		return false, fmt.Errorf("failed to read audio playlist: %w", err)
-	}
-	videoPlaylistBody, err := os.ReadFile(filepath.Join(targetDir, filepath.FromSlash(videoPlaylistPath)))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
+		playlistBody, err := os.ReadFile(filepath.Join(targetDir, filepath.FromSlash(playlistPath)))
+		if err != nil {
+			if os.IsNotExist(err) {
+				return false, nil
+			}
+			return false, fmt.Errorf("failed to read media playlist: %w", err)
 		}
-		return false, fmt.Errorf("failed to read video playlist: %w", err)
-	}
-
-	audioMedia, err := hls.ParseMedia(audioPlaylistBody)
-	if err != nil {
-		return false, err
-	}
-	videoMedia, err := hls.ParseMedia(videoPlaylistBody)
-	if err != nil {
-		return false, err
-	}
-
-	if ok, err := hasAllMedia(targetDir, audioMedia.MediaURIs); !ok || err != nil {
-		return ok, err
-	}
-	if ok, err := hasAllMedia(targetDir, videoMedia.MediaURIs); !ok || err != nil {
-		return ok, err
+		media, err := hls.ParseMedia(playlistBody)
+		if err != nil {
+			return false, err
+		}
+		if ok, err := hasAllMedia(targetDir, media.MediaURIs); !ok || err != nil {
+			return ok, err
+		}
 	}
 
 	return true, nil

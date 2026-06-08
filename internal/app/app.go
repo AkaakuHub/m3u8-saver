@@ -53,11 +53,9 @@ type filePlan struct {
 }
 
 type remotePlan struct {
-	Master        filePlan
-	AudioPlaylist filePlan
-	VideoPlaylist filePlan
-	AudioMedia    []filePlan
-	VideoMedia    []filePlan
+	Master    filePlan
+	Playlists []filePlan
+	Media     []filePlan
 }
 
 func New(cfg config.Config, output io.Writer) (*App, error) {
@@ -188,10 +186,6 @@ func (a *App) processTarget(ctx context.Context, current target) dateResult {
 	if err != nil {
 		return dateResult{Index: current.Index, Label: current.Label, Status: status.Failed, Err: err}
 	}
-	if alreadyArchived {
-		return dateResult{Index: current.Index, Label: current.Label, Status: status.Archived}
-	}
-
 	plan, err := a.buildRemotePlan(ctx, current.URL)
 	if err != nil {
 		if errors.Is(err, downloader.ErrNotFound) {
@@ -199,7 +193,15 @@ func (a *App) processTarget(ctx context.Context, current target) dateResult {
 		}
 		return dateResult{Index: current.Index, Label: current.Label, Status: status.Failed, Err: err}
 	}
-
+	if alreadyArchived {
+		complete, err := a.hasSavedPlan(current, plan)
+		if err != nil {
+			return dateResult{Index: current.Index, Label: current.Label, Status: status.Failed, Err: err}
+		}
+		if complete {
+			return dateResult{Index: current.Index, Label: current.Label, Status: status.Archived}
+		}
+	}
 	if err := a.saveTarget(ctx, current, plan); err != nil {
 		return dateResult{Index: current.Index, Label: current.Label, Status: status.Failed, Err: err}
 	}
@@ -208,6 +210,29 @@ func (a *App) processTarget(ctx context.Context, current target) dateResult {
 	}
 
 	return dateResult{Index: current.Index, Label: current.Label, Status: status.Success}
+}
+
+func (a *App) hasSavedPlan(current target, plan remotePlan) (bool, error) {
+	targetDir := filepath.Join(a.config.OutDir, filepath.FromSlash(current.LocalDir))
+	files := make([]filePlan, 0, 1+len(plan.Playlists)+len(plan.Media))
+	files = append(files, plan.Master)
+	files = append(files, plan.Playlists...)
+	files = append(files, plan.Media...)
+
+	for _, file := range files {
+		info, err := os.Stat(filepath.Join(targetDir, filepath.FromSlash(file.LocalPath)))
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return false, nil
+			}
+			return false, fmt.Errorf("failed to inspect archived file: %w", err)
+		}
+		if info.Size() != file.ExpectedSize {
+			return false, nil
+		}
+	}
+
+	return true, nil
 }
 
 func (a *App) processDryRun(ctx context.Context, current target) dateResult {
@@ -235,57 +260,8 @@ func (a *App) buildRemotePlan(ctx context.Context, masterURL string) (remotePlan
 	if err != nil {
 		return remotePlan{}, err
 	}
-	localMasterBody := hls.BuildSingleVariantMaster(masterPlaylist)
 
-	audioURL, err := resolveURL(masterURL, masterPlaylist.AudioURI)
-	if err != nil {
-		return remotePlan{}, err
-	}
-	videoURL, err := resolveURL(masterURL, masterPlaylist.VideoURI)
-	if err != nil {
-		return remotePlan{}, err
-	}
-
-	audioBody, err := a.client.Fetch(ctx, audioURL)
-	if err != nil {
-		return remotePlan{}, err
-	}
-	videoBody, err := a.client.Fetch(ctx, videoURL)
-	if err != nil {
-		return remotePlan{}, err
-	}
-
-	audioPlaylist, err := hls.ParseMedia(audioBody)
-	if err != nil {
-		return remotePlan{}, err
-	}
-	videoPlaylist, err := hls.ParseMedia(videoBody)
-	if err != nil {
-		return remotePlan{}, err
-	}
-
-	audioMediaURLs, err := resolveMany(audioURL, audioPlaylist.MediaURIs)
-	if err != nil {
-		return remotePlan{}, err
-	}
-	videoMediaURLs, err := resolveMany(videoURL, videoPlaylist.MediaURIs)
-	if err != nil {
-		return remotePlan{}, err
-	}
-
-	audioPlaylistLocalPath, err := hls.LocalPathFromReference(masterPlaylist.AudioURI)
-	if err != nil {
-		return remotePlan{}, err
-	}
-	videoPlaylistLocalPath, err := hls.LocalPathFromReference(masterPlaylist.VideoURI)
-	if err != nil {
-		return remotePlan{}, err
-	}
-	audioMediaFiles, err := a.buildMediaFilePlans(ctx, audioPlaylist.MediaURIs, audioMediaURLs)
-	if err != nil {
-		return remotePlan{}, err
-	}
-	videoMediaFiles, err := a.buildMediaFilePlans(ctx, videoPlaylist.MediaURIs, videoMediaURLs)
+	playlists, mediaFiles, err := a.buildPlaylistPlans(ctx, masterURL, masterPlaylist.References())
 	if err != nil {
 		return remotePlan{}, err
 	}
@@ -294,23 +270,11 @@ func (a *App) buildRemotePlan(ctx context.Context, masterURL string) (remotePlan
 		Master: filePlan{
 			RemoteURL:    masterURL,
 			LocalPath:    "index.m3u8",
-			Body:         localMasterBody,
-			ExpectedSize: int64(len(localMasterBody)),
+			Body:         masterBody,
+			ExpectedSize: int64(len(masterBody)),
 		},
-		AudioPlaylist: filePlan{
-			RemoteURL:    audioURL,
-			LocalPath:    audioPlaylistLocalPath,
-			Body:         audioBody,
-			ExpectedSize: int64(len(audioBody)),
-		},
-		VideoPlaylist: filePlan{
-			RemoteURL:    videoURL,
-			LocalPath:    videoPlaylistLocalPath,
-			Body:         videoBody,
-			ExpectedSize: int64(len(videoBody)),
-		},
-		AudioMedia: audioMediaFiles,
-		VideoMedia: videoMediaFiles,
+		Playlists: playlists,
+		Media:     mediaFiles,
 	}, nil
 }
 
@@ -327,27 +291,18 @@ func (a *App) saveTarget(ctx context.Context, current target, plan remotePlan) e
 	}
 	requiredFiles = append(requiredFiles, filepath.Join(targetDir, plan.Master.LocalPath))
 
-	if err := a.writeIfMissing(filepath.Join(targetDir, plan.AudioPlaylist.LocalPath), plan.AudioPlaylist.Body, plan.AudioPlaylist.ExpectedSize); err != nil {
-		return err
+	for _, playlist := range plan.Playlists {
+		if err := a.writeIfMissing(filepath.Join(targetDir, playlist.LocalPath), playlist.Body, playlist.ExpectedSize); err != nil {
+			return err
+		}
+		requiredFiles = append(requiredFiles, filepath.Join(targetDir, playlist.LocalPath))
 	}
-	requiredFiles = append(requiredFiles, filepath.Join(targetDir, plan.AudioPlaylist.LocalPath))
 
-	if err := a.writeIfMissing(filepath.Join(targetDir, plan.VideoPlaylist.LocalPath), plan.VideoPlaylist.Body, plan.VideoPlaylist.ExpectedSize); err != nil {
-		return err
-	}
-	requiredFiles = append(requiredFiles, filepath.Join(targetDir, plan.VideoPlaylist.LocalPath))
-
-	audioFiles, err := a.downloadMediaFiles(ctx, targetDir, current.Label, plan.AudioMedia)
+	mediaFiles, err := a.downloadMediaFiles(ctx, targetDir, current.Label, plan.Media)
 	if err != nil {
 		return err
 	}
-	videoFiles, err := a.downloadMediaFiles(ctx, targetDir, current.Label, plan.VideoMedia)
-	if err != nil {
-		return err
-	}
-
-	requiredFiles = append(requiredFiles, audioFiles...)
-	requiredFiles = append(requiredFiles, videoFiles...)
+	requiredFiles = append(requiredFiles, mediaFiles...)
 
 	for _, filePath := range requiredFiles {
 		if _, err := os.Stat(filePath); err != nil {
@@ -405,6 +360,48 @@ func (a *App) downloadMediaFiles(ctx context.Context, targetDir, label string, f
 	}
 
 	return localPaths, nil
+}
+
+func (a *App) buildPlaylistPlans(ctx context.Context, masterURL string, references []string) ([]filePlan, []filePlan, error) {
+	playlists := make([]filePlan, 0, len(references))
+	mediaFiles := make([]filePlan, 0)
+
+	for _, reference := range references {
+		playlistURL, err := resolveURL(masterURL, reference)
+		if err != nil {
+			return nil, nil, err
+		}
+		playlistBody, err := a.client.Fetch(ctx, playlistURL)
+		if err != nil {
+			return nil, nil, err
+		}
+		playlistLocalPath, err := hls.LocalPathFromReference(reference)
+		if err != nil {
+			return nil, nil, err
+		}
+		playlist, err := hls.ParseMedia(playlistBody)
+		if err != nil {
+			return nil, nil, err
+		}
+		mediaURLs, err := resolveMany(playlistURL, playlist.MediaURIs)
+		if err != nil {
+			return nil, nil, err
+		}
+		files, err := a.buildMediaFilePlans(ctx, playlist.MediaURIs, mediaURLs)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		playlists = append(playlists, filePlan{
+			RemoteURL:    playlistURL,
+			LocalPath:    playlistLocalPath,
+			Body:         playlistBody,
+			ExpectedSize: int64(len(playlistBody)),
+		})
+		mediaFiles = append(mediaFiles, files...)
+	}
+
+	return playlists, mediaFiles, nil
 }
 
 func (a *App) shouldSendPeriodicDiscord(succeeded int) bool {

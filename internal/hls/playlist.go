@@ -6,15 +6,20 @@ import (
 	"fmt"
 	"net/url"
 	"path"
-	"strconv"
 	"strings"
 )
 
 type MasterPlaylist struct {
-	AudioURI        string
-	AudioLine       string
-	VideoURI        string
-	VideoStreamLine string
+	AudioURIs []string
+	VideoURIs []string
+}
+
+func (p MasterPlaylist) References() []string {
+	references := make([]string, 0, len(p.AudioURIs)+len(p.VideoURIs))
+	references = append(references, p.AudioURIs...)
+	references = append(references, p.VideoURIs...)
+
+	return references
 }
 
 type MediaPlaylist struct {
@@ -26,18 +31,12 @@ func ParseMaster(body []byte) (MasterPlaylist, error) {
 		return MasterPlaylist{}, fmt.Errorf("master playlist is not a valid m3u8 file")
 	}
 
-	// Observed master playlists use multiple audio and video variants for quality levels.
-	// Audio selection is strict: prefer the single DEFAULT=YES track, otherwise require a single track.
-	// Video selection is strict: choose the variant with the highest BANDWIDTH.
 	scanner := bufio.NewScanner(bytes.NewReader(body))
-	audioCandidates := make([]audioCandidate, 0, 2)
-	defaultAudioCandidates := make([]audioCandidate, 0, 1)
-	var videoURI string
-	var videoStreamLine string
-	var highestBandwidth int
+	audioSeen := map[string]struct{}{}
+	videoSeen := map[string]struct{}{}
+	audioURIs := make([]string, 0)
+	videoURIs := make([]string, 0)
 	expectVideoURI := false
-	currentBandwidth := 0
-	currentStreamLine := ""
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -50,34 +49,17 @@ func ParseMaster(body []byte) (MasterPlaylist, error) {
 			if err != nil {
 				return MasterPlaylist{}, err
 			}
-			candidate := audioCandidate{
-				URI:  uri,
-				Line: line,
-			}
-			audioCandidates = append(audioCandidates, candidate)
-			if strings.Contains(line, "DEFAULT=YES") {
-				defaultAudioCandidates = append(defaultAudioCandidates, candidate)
-			}
+			audioURIs = appendIfMissing(audioURIs, audioSeen, uri)
 			continue
 		}
 
 		if strings.HasPrefix(line, "#EXT-X-STREAM-INF:") {
-			bandwidth, err := readIntAttribute(line, "BANDWIDTH")
-			if err != nil {
-				return MasterPlaylist{}, err
-			}
-			currentBandwidth = bandwidth
-			currentStreamLine = line
 			expectVideoURI = true
 			continue
 		}
 
 		if expectVideoURI && !strings.HasPrefix(line, "#") {
-			if videoURI == "" || currentBandwidth > highestBandwidth {
-				videoURI = line
-				videoStreamLine = currentStreamLine
-				highestBandwidth = currentBandwidth
-			}
+			videoURIs = appendIfMissing(videoURIs, videoSeen, line)
 			expectVideoURI = false
 		}
 	}
@@ -85,25 +67,16 @@ func ParseMaster(body []byte) (MasterPlaylist, error) {
 	if err := scanner.Err(); err != nil {
 		return MasterPlaylist{}, fmt.Errorf("failed to read master playlist: %w", err)
 	}
-	audio, err := selectAudioURI(audioCandidates, defaultAudioCandidates)
-	if err != nil {
-		return MasterPlaylist{}, err
-	}
-	if audio.URI == "" {
+	if len(audioURIs) == 0 {
 		return MasterPlaylist{}, fmt.Errorf("audio playlist URI was not found in master playlist")
 	}
-	if videoURI == "" {
+	if len(videoURIs) == 0 {
 		return MasterPlaylist{}, fmt.Errorf("video playlist URI was not found in master playlist")
-	}
-	if videoStreamLine == "" {
-		return MasterPlaylist{}, fmt.Errorf("video stream info was not found in master playlist")
 	}
 
 	return MasterPlaylist{
-		AudioURI:        audio.URI,
-		AudioLine:       audio.Line,
-		VideoURI:        videoURI,
-		VideoStreamLine: videoStreamLine,
+		AudioURIs: audioURIs,
+		VideoURIs: videoURIs,
 	}, nil
 }
 
@@ -175,78 +148,6 @@ func readQuotedAttribute(line, key string) (string, error) {
 	}
 
 	return line[valueStart : valueStart+valueEnd], nil
-}
-
-type audioCandidate struct {
-	URI  string
-	Line string
-}
-
-func selectAudioURI(audioCandidates, defaultAudioCandidates []audioCandidate) (audioCandidate, error) {
-	switch {
-	case len(defaultAudioCandidates) == 1:
-		return defaultAudioCandidates[0], nil
-	case len(defaultAudioCandidates) > 1:
-		return audioCandidate{}, fmt.Errorf("multiple default audio playlists were found in master playlist")
-	case len(audioCandidates) == 1:
-		return audioCandidates[0], nil
-	case len(audioCandidates) == 0:
-		return audioCandidate{}, nil
-	default:
-		return audioCandidate{}, fmt.Errorf("audio playlist selection is ambiguous without DEFAULT=YES")
-	}
-}
-
-func readIntAttribute(line, key string) (int, error) {
-	value, err := readAttributeValue(line, key)
-	if err != nil {
-		return 0, err
-	}
-
-	number, err := strconv.Atoi(value)
-	if err != nil {
-		return 0, fmt.Errorf("%s attribute is not a valid integer in line: %s", key, line)
-	}
-
-	return number, nil
-}
-
-func readAttributeValue(line, key string) (string, error) {
-	pattern := key + "="
-	start := strings.Index(line, pattern)
-	if start == -1 {
-		return "", fmt.Errorf("%s attribute was not found in line: %s", key, line)
-	}
-
-	valueStart := start + len(pattern)
-	if valueStart >= len(line) {
-		return "", fmt.Errorf("%s attribute is empty in line: %s", key, line)
-	}
-
-	if line[valueStart] == '"' {
-		valueEnd := strings.Index(line[valueStart+1:], "\"")
-		if valueEnd == -1 {
-			return "", fmt.Errorf("%s attribute is not closed in line: %s", key, line)
-		}
-		return line[valueStart+1 : valueStart+1+valueEnd], nil
-	}
-
-	valueEnd := strings.Index(line[valueStart:], ",")
-	if valueEnd == -1 {
-		return line[valueStart:], nil
-	}
-
-	return line[valueStart : valueStart+valueEnd], nil
-}
-
-func BuildSingleVariantMaster(master MasterPlaylist) []byte {
-	return []byte(strings.Join([]string{
-		"#EXTM3U",
-		master.AudioLine,
-		master.VideoStreamLine,
-		master.VideoURI,
-		"",
-	}, "\n"))
 }
 
 func LocalPathFromReference(reference string) (string, error) {
