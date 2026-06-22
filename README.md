@@ -22,6 +22,8 @@ The tool is focused on saving source assets. It does not transcode, mux, or rewr
 
 See `config.example.json`.
 
+`downloadAllVariants` controls HLS variant selection. When `false`, the tool saves only the selected audio playlist and the highest `BANDWIDTH` video playlist. When `true`, it saves every audio and video variant referenced by the master playlist.
+
 ## Run
 
 Dry run:

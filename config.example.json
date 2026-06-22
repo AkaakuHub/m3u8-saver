@@ -5,6 +5,7 @@
   "endDate": "20260630",
   "outDir": "./archive",
   "dryRun": true,
+  "downloadAllVariants": false,
   "retryCount": 3,
   "parallelism": 1,
   "requestTimeoutSec": 30,

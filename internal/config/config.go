@@ -12,16 +12,17 @@ import (
 const dateLayout = "20060102"
 
 type Config struct {
-	BaseURL           string         `json:"baseUrl"`
-	ArchiveJSONPath   string         `json:"archiveJsonPath"`
-	StartDate         string         `json:"startDate"`
-	EndDate           string         `json:"endDate"`
-	OutDir            string         `json:"outDir"`
-	DryRun            bool           `json:"dryRun"`
-	RetryCount        int            `json:"retryCount"`
-	Parallelism       int            `json:"parallelism"`
-	RequestTimeoutSec int            `json:"requestTimeoutSec"`
-	Discord           *DiscordConfig `json:"discord"`
+	BaseURL             string         `json:"baseUrl"`
+	ArchiveJSONPath     string         `json:"archiveJsonPath"`
+	StartDate           string         `json:"startDate"`
+	EndDate             string         `json:"endDate"`
+	OutDir              string         `json:"outDir"`
+	DryRun              bool           `json:"dryRun"`
+	DownloadAllVariants bool           `json:"downloadAllVariants"`
+	RetryCount          int            `json:"retryCount"`
+	Parallelism         int            `json:"parallelism"`
+	RequestTimeoutSec   int            `json:"requestTimeoutSec"`
+	Discord             *DiscordConfig `json:"discord"`
 }
 
 type DiscordConfig struct {

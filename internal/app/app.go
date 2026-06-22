@@ -260,8 +260,20 @@ func (a *App) buildRemotePlan(ctx context.Context, masterURL string) (remotePlan
 	if err != nil {
 		return remotePlan{}, err
 	}
+	localMasterBody := masterBody
+	references := masterPlaylist.References()
+	if !a.config.DownloadAllVariants {
+		localMasterBody, err = hls.BuildSingleVariantMaster(masterPlaylist)
+		if err != nil {
+			return remotePlan{}, err
+		}
+		references, err = masterPlaylist.SingleVariantReferences()
+		if err != nil {
+			return remotePlan{}, err
+		}
+	}
 
-	playlists, mediaFiles, err := a.buildPlaylistPlans(ctx, masterURL, masterPlaylist.References())
+	playlists, mediaFiles, err := a.buildPlaylistPlans(ctx, masterURL, references)
 	if err != nil {
 		return remotePlan{}, err
 	}
@@ -270,8 +282,8 @@ func (a *App) buildRemotePlan(ctx context.Context, masterURL string) (remotePlan
 		Master: filePlan{
 			RemoteURL:    masterURL,
 			LocalPath:    "index.m3u8",
-			Body:         masterBody,
-			ExpectedSize: int64(len(masterBody)),
+			Body:         localMasterBody,
+			ExpectedSize: int64(len(localMasterBody)),
 		},
 		Playlists: playlists,
 		Media:     mediaFiles,

@@ -122,9 +122,7 @@ func localDirFromVideoURL(videoURL string) (string, error) {
 	}
 
 	cleanPath := path.Clean(strings.TrimPrefix(parsedURL.Path, "/"))
-	if strings.HasSuffix(cleanPath, "/index.m3u8") {
-		cleanPath = strings.TrimSuffix(cleanPath, "/index.m3u8")
-	}
+	cleanPath = strings.TrimSuffix(cleanPath, "/index.m3u8")
 	cleanPath = strings.TrimPrefix(cleanPath, "archive/hls/")
 	if cleanPath == "" || cleanPath == "." {
 		return "", fmt.Errorf("video_url path is empty: %s", videoURL)
